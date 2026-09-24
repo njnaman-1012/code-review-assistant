@@ -22,30 +22,30 @@ export function createReviewController(reviewService, codeActionService) {
     },
 
     // GET /api/reviews?limit=20&offset=0
-    list(req, res) {
+    async list(req, res) {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
       const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-      res.json({ success: true, data: reviewService.listReviews({ limit, offset }) });
+      res.json({ success: true, data: await reviewService.listReviews({ limit, offset }) });
     },
 
     // GET /api/reviews/:id
-    getById(req, res) {
-      res.json({ success: true, data: reviewService.getReview(req.reviewId) });
+    async getById(req, res) {
+      res.json({ success: true, data: await reviewService.getReview(req.reviewId) });
     },
 
     // DELETE /api/reviews/:id
-    remove(req, res) {
-      reviewService.deleteReview(req.reviewId);
+    async remove(req, res) {
+      await reviewService.deleteReview(req.reviewId);
       res.json({ success: true, data: { id: req.reviewId, deleted: true } });
     },
 
     // GET /api/reviews/:id/report?format=html|md
-    report(req, res) {
+    async report(req, res) {
       const format = (req.query.format || 'html').toLowerCase();
       if (!['html', 'md', 'markdown'].includes(format)) {
         throw new AppError('Report format must be "html" or "md".', 400, 'INVALID_FORMAT');
       }
-      const review = reviewService.getReview(req.reviewId);
+      const review = await reviewService.getReview(req.reviewId);
       const isHtml = format === 'html';
       const filename = `code-review-${review.id}.${isHtml ? 'html' : 'md'}`;
 

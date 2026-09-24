@@ -44,70 +44,76 @@ function rowToSummary(row) {
   };
 }
 
-export function createReviewModel(db) {
-  const insertStatement = db.prepare(`
-    INSERT INTO reviews (
-      language, original_code, summary, logic, issues, issue_count, quality_score,
-      suggestions, improved_code, improvement_explanation, complexity, static_analysis,
-      comparison, final_summary, quality, ai_status, ai_message, ai_provider, ai_model
-    ) VALUES (
-      @language, @originalCode, @summary, @logic, @issues, @issueCount, @qualityScore,
-      @suggestions, @improvedCode, @improvements, @complexity, @staticAnalysis,
-      @comparison, @finalSummary, @quality, @aiStatus, @aiMessage, @aiProvider, @aiModel
-    )
-  `);
-  const findByIdStatement = db.prepare('SELECT * FROM reviews WHERE id = ?');
-  const listStatement = db.prepare(`
-    SELECT id, language, summary, issue_count, quality_score, ai_status, created_at,
-           substr(original_code, 1, 160) AS code_preview
-    FROM reviews
-    ORDER BY created_at DESC, id DESC
-    LIMIT ? OFFSET ?
-  `);
-  const countStatement = db.prepare('SELECT COUNT(*) AS total FROM reviews');
-  const deleteStatement = db.prepare('DELETE FROM reviews WHERE id = ?');
+const INSERT_SQL = `
+  INSERT INTO reviews (
+    language, original_code, summary, logic, issues, issue_count, quality_score,
+    suggestions, improved_code, improvement_explanation, complexity, static_analysis,
+    comparison, final_summary, quality, ai_status, ai_message, ai_provider, ai_model
+  ) VALUES (
+    :language, :originalCode, :summary, :logic, :issues, :issueCount, :qualityScore,
+    :suggestions, :improvedCode, :improvements, :complexity, :staticAnalysis,
+    :comparison, :finalSummary, :quality, :aiStatus, :aiMessage, :aiProvider, :aiModel
+  )`;
+const LIST_SQL = `
+  SELECT id, language, summary, issue_count, quality_score, ai_status, created_at,
+         substr(original_code, 1, 160) AS code_preview
+  FROM reviews
+  ORDER BY created_at DESC, id DESC
+  LIMIT ? OFFSET ?`;
 
+export function createReviewModel(db) {
   return {
-    create(review) {
-      const result = insertStatement.run({
-        language: review.language,
-        originalCode: review.originalCode,
-        summary: review.summary ?? '',
-        logic: toJson(review.logic, {}),
-        issues: toJson(review.issues, []),
-        issueCount: review.issues?.length ?? 0,
-        qualityScore: review.quality?.score ?? null,
-        suggestions: toJson(review.suggestions, []),
-        improvedCode: review.improvedCode ?? '',
-        improvements: toJson(review.improvements, {}),
-        complexity: toJson(review.complexity, {}),
-        staticAnalysis: toJson(review.staticAnalysis, {}),
-        comparison: review.comparison ? JSON.stringify(review.comparison) : null,
-        finalSummary: review.finalSummary ?? '',
-        quality: toJson(review.quality, {}),
-        aiStatus: review.ai?.status ?? 'unavailable',
-        aiMessage: review.ai?.message ?? null,
-        aiProvider: review.ai?.provider ?? null,
-        aiModel: review.ai?.model ?? null,
+    async create(review) {
+      const result = await db.execute({
+        sql: INSERT_SQL,
+        args: {
+          language: review.language,
+          originalCode: review.originalCode,
+          summary: review.summary ?? '',
+          logic: toJson(review.logic, {}),
+          issues: toJson(review.issues, []),
+          issueCount: review.issues?.length ?? 0,
+          qualityScore: review.quality?.score ?? null,
+          suggestions: toJson(review.suggestions, []),
+          improvedCode: review.improvedCode ?? '',
+          improvements: toJson(review.improvements, {}),
+          complexity: toJson(review.complexity, {}),
+          staticAnalysis: toJson(review.staticAnalysis, {}),
+          comparison: review.comparison ? JSON.stringify(review.comparison) : null,
+          finalSummary: review.finalSummary ?? '',
+          quality: toJson(review.quality, {}),
+          aiStatus: review.ai?.status ?? 'unavailable',
+          aiMessage: review.ai?.message ?? null,
+          aiProvider: review.ai?.provider ?? null,
+          aiModel: review.ai?.model ?? null,
+        },
       });
       return this.findById(Number(result.lastInsertRowid));
     },
 
-    findById(id) {
-      const row = findByIdStatement.get(id);
-      return row ? rowToReview(row) : null;
+    async findById(id) {
+      const { rows } = await db.execute({ sql: 'SELECT * FROM reviews WHERE id = ?', args: [id] });
+      return rows.length ? rowToReview(rows[0]) : null;
     },
 
-    findAll({ limit = 50, offset = 0 } = {}) {
-      return listStatement.all(limit, offset).map(rowToSummary);
+    async findAll({ limit = 50, offset = 0 } = {}) {
+      const { rows } = await db.execute({ sql: LIST_SQL, args: [limit, offset] });
+      return rows.map(rowToSummary);
     },
 
-    count() {
-      return countStatement.get().total;
+    async count() {
+      const { rows } = await db.execute('SELECT COUNT(*) AS total FROM reviews');
+      return rows[0].total;
     },
 
-    deleteById(id) {
-      return deleteStatement.run(id).changes > 0;
+    // The generated code of the review is deleted in the same batch
+    // (hosted databases do not always enforce ON DELETE CASCADE).
+    async deleteById(id) {
+      const [, deleted] = await db.batch([
+        { sql: 'DELETE FROM code_actions WHERE review_id = ?', args: [id] },
+        { sql: 'DELETE FROM reviews WHERE id = ?', args: [id] },
+      ], 'write');
+      return deleted.rowsAffected > 0;
     },
   };
 }

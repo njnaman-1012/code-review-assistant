@@ -22,9 +22,13 @@ const DEFAULT_AI_MESSAGE = `The AI review is temporarily unavailable. ${CHECKS_O
 
 const NO_CODE_ACTIONS = { correct: null, improve: null };
 
-export function createReviewService({ reviewModel, codeActionModel, aiReviewService, analyzeCode = defaultAnalyzer }) {
+// aiTimeBudgetMs: total time the AI may use for one review (0 = no limit; 240 s on Vercel).
+export function createReviewService({ reviewModel, codeActionModel, aiReviewService, analyzeCode = defaultAnalyzer, aiTimeBudgetMs = 0 }) {
   // A review is returned together with its generated corrected / improved code.
-  const withCodeActions = (review) => ({ ...review, codeActions: codeActionModel?.findByReview(review.id) ?? NO_CODE_ACTIONS });
+  const withCodeActions = async (review) => ({
+    ...review,
+    codeActions: codeActionModel ? await codeActionModel.findByReview(review.id) : NO_CODE_ACTIONS,
+  });
 
   async function runAiReview({ language, code, staticResult }) {
     const { provider, model, unavailableReason } = aiReviewService.info();
@@ -36,7 +40,8 @@ export function createReviewService({ reviewModel, codeActionModel, aiReviewServ
       };
     }
     try {
-      const aiResult = await aiReviewService.reviewCode({ language, code, staticResult });
+      const deadline = aiTimeBudgetMs ? Date.now() + aiTimeBudgetMs : undefined;
+      const aiResult = await aiReviewService.reviewCode({ language, code, staticResult, deadline });
       if (aiResult.failedProviders?.length) {
         logger.warn('AI review answered after failover', { provider: aiResult.provider, failed: aiResult.failedProviders });
       }
@@ -68,25 +73,26 @@ export function createReviewService({ reviewModel, codeActionModel, aiReviewServ
 
       const review = aggregateReview({ language, code, staticResult, languageCheck, aiResult, ai, improvedStaticResult });
       try {
-        return withCodeActions(reviewModel.create(review));
+        return await withCodeActions(await reviewModel.create(review));
       } catch (error) {
         logger.error('Failed to save review', { error: error.message });
         throw new AppError('The review was generated but could not be saved to the database.', 500, 'DATABASE_ERROR');
       }
     },
 
-    listReviews({ limit, offset }) {
-      return { reviews: reviewModel.findAll({ limit, offset }), total: reviewModel.count() };
+    async listReviews({ limit, offset }) {
+      const [reviews, total] = await Promise.all([reviewModel.findAll({ limit, offset }), reviewModel.count()]);
+      return { reviews, total };
     },
 
-    getReview(id) {
-      const review = reviewModel.findById(id);
+    async getReview(id) {
+      const review = await reviewModel.findById(id);
       if (!review) throw new AppError(`Review #${id} was not found.`, 404, 'REVIEW_NOT_FOUND');
       return withCodeActions(review);
     },
 
-    deleteReview(id) {
-      if (!reviewModel.deleteById(id)) throw new AppError(`Review #${id} was not found.`, 404, 'REVIEW_NOT_FOUND');
+    async deleteReview(id) {
+      if (!(await reviewModel.deleteById(id))) throw new AppError(`Review #${id} was not found.`, 404, 'REVIEW_NOT_FOUND');
     },
   };
 }

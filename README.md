@@ -79,7 +79,7 @@ It is an undergraduate **Software Engineering project**. It combines two kinds o
 |---|---|
 | Frontend | React 19, Vite, React Router, Axios, Monaco Editor (`@monaco-editor/react`), plain CSS |
 | Backend | Node.js (≥ 20), Express 5, Helmet, CORS, express-rate-limit, dotenv |
-| Database | SQLite via `better-sqlite3` (hand-written SQL schema) |
+| Database | SQLite through the libSQL client (`@libsql/client`): a local file in development, free hosted Turso on Vercel (hand-written SQL schema) |
 | Static analysis | Tree-sitter (`web-tree-sitter` + `tree-sitter-wasms`), ESLint `Linter` API |
 | AI | Free OpenAI-compatible providers via the `openai` SDK (OVHcloud AI Endpoints, LLM7, Google Gemini, Groq, OpenRouter, Ollama); optional paid Anthropic Claude via `@anthropic-ai/sdk` |
 | Validation | Zod (AI response schema) |
@@ -269,39 +269,32 @@ $env:NODE_ENV="production"; npm start
 
 Then open **<http://localhost:5000>**. On macOS/Linux the second line is `NODE_ENV=production npm start`.
 
-## Deployment
+## Deployment (free: Vercel + Turso)
 
-The application is deployed as **one Node.js web service**. The example below uses [Render](https://render.com); Railway, Fly.io or any VPS work the same way.
+The app is deployed for free:
+- **Vercel** (Hobby plan) serves the React app and runs the Express API as one serverless function (`api/index.mjs`, configured in `vercel.json`).
+- The reviews are stored in **Turso**, a free hosted SQLite database, because serverless functions cannot keep a local database file.
 
-1. Put the project on GitHub. `.env` and the database are already in `.gitignore`, so no secrets are uploaded.
-2. On Render, choose **New → Web Service** and connect the repository. Use these settings:
-
-   | Setting | Value |
-   |---|---|
-   | Runtime | Node |
-   | Build command | `npm ci --include=dev && npm run build` |
-   | Start command | `npm start` |
-   | Health check path | `/api/health` |
-
-3. Add these **environment variables** in the dashboard (never commit them):
+1. **Turso:** sign up at <https://turso.tech> with GitHub, create a database, and copy its **URL** (`libsql://…`) and an **auth token**.
+2. **Vercel:** sign up at <https://vercel.com> with GitHub, then choose **Add New → Project** and import this repository. The build settings come from `vercel.json`.
+3. Add the **environment variables** below, then click **Deploy**:
 
    | Variable | Value |
    |---|---|
-   | `NODE_ENV` | `production` |
-   | `TRUST_PROXY` | `1` (real client IPs for rate limiting behind the host's proxy) |
+   | `TURSO_DATABASE_URL` | the `libsql://…` URL from Turso |
+   | `TURSO_AUTH_TOKEN` | the token from Turso |
+   | `NODEJS_HELPERS` | `0` (Express parses the requests itself) |
    | `AI_PROVIDER` | `auto` |
-   | `GEMINI_API_KEY` | optional free key: faster, better reviews |
-   | `DATABASE_URL` | only with a persistent disk, e.g. `/var/data/code_review.db` |
+   | `GEMINI_API_KEY` | optional free key: faster reviews |
 
-4. Deploy, then open `https://<your-service>.onrender.com`.
+4. Open `https://<project>.vercel.app`. Every `git push` deploys again automatically.
 
 **Things to know**
-- **Free hosting is limited in two ways:**
-  - The service sleeps when idle, so the first request after a pause can take up to a minute.
-  - Files are not kept between restarts, so the SQLite review history is lost on every restart or redeploy.
-  - To keep the history, attach a persistent disk (a paid option) and point `DATABASE_URL` at it.
-- **Reviews can take 1-4 minutes** with the keyless AI providers. Do not host the backend where requests are cut off after about 30 seconds, such as serverless functions (Vercel or Netlify functions) or Heroku.
-- The server needs outbound internet access to reach the AI providers.
+- **Time limit:** a Vercel function on the free plan is stopped after 300 s.
+  - The server therefore gives the AI at most 240 s per review or code action (`AI_TIME_BUDGET_MS`).
+  - If the free AI providers are slower than that, the review is completed with the automated checks only.
+- **Database:** the tables are created automatically on the first request. Locally, the app keeps using the file `server/database/code_review.db`.
+- **Other hosts:** the app can also run as one normal Node.js server. Run `npm run build`, then `npm start` with `NODE_ENV=production` (see *Production mode* above).
 
 ## How to use
 

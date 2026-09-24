@@ -88,8 +88,8 @@ export function createRoutingProvider(handlers) {
   return provider;
 }
 
-export function createTestApp({ provider = null } = {}) {
-  const db = createDatabase(':memory:');
+export async function createTestApp({ provider = null } = {}) {
+  const db = await createDatabase({ url: ':memory:' });
   const aiReviewService = createAiReviewService(provider);
   const app = createApp({ db, aiReviewService, config: testConfig });
   return { app, db };

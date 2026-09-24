@@ -82,14 +82,14 @@ export function createCodeActionService({
 
   return {
     // { correct: CodeAction | null, improve: CodeAction | null }
-    listForReview(reviewId) {
+    async listForReview(reviewId) {
       return codeActionModel.findByReview(reviewId);
     },
 
     async generate(reviewId, action) {
       if (!CODE_ACTIONS.includes(action)) throw new AppError('Unknown code action.', 400, 'INVALID_ACTION');
 
-      const review = reviewModel.findById(reviewId);
+      const review = await reviewModel.findById(reviewId);
       if (!review) throw new AppError(`Review #${reviewId} was not found.`, 404, 'REVIEW_NOT_FOUND');
 
       const language = normalizeLanguage(review.language);
@@ -126,7 +126,7 @@ export function createCodeActionService({
           logger.warn(`Code ${action} answered after failover`, { provider: result.provider, failed: result.failedProviders });
         }
 
-        const saved = codeActionModel.save({
+        const saved = await codeActionModel.save({
           reviewId,
           action,
           code: matchTrailingNewline(result.code, review.originalCode),

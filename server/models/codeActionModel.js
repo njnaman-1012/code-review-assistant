@@ -17,48 +17,52 @@ function rowToCodeAction(row) {
   };
 }
 
-export function createCodeActionModel(db) {
-  // Generating the same action again replaces the previous version.
-  const upsertStatement = db.prepare(`
-    INSERT INTO code_actions (review_id, action, code, changes, summary, checks, ai_provider, ai_model, generated_at)
-    VALUES (@reviewId, @action, @code, @changes, @summary, @checks, @aiProvider, @aiModel,
-            strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-    ON CONFLICT (review_id, action) DO UPDATE SET
-      code = excluded.code,
-      changes = excluded.changes,
-      summary = excluded.summary,
-      checks = excluded.checks,
-      ai_provider = excluded.ai_provider,
-      ai_model = excluded.ai_model,
-      generated_at = excluded.generated_at
-  `);
-  const findStatement = db.prepare('SELECT * FROM code_actions WHERE review_id = ? AND action = ?');
-  const listStatement = db.prepare('SELECT * FROM code_actions WHERE review_id = ?');
+// Generating the same action again replaces the previous version.
+const UPSERT_SQL = `
+  INSERT INTO code_actions (review_id, action, code, changes, summary, checks, ai_provider, ai_model, generated_at)
+  VALUES (:reviewId, :action, :code, :changes, :summary, :checks, :aiProvider, :aiModel,
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  ON CONFLICT (review_id, action) DO UPDATE SET
+    code = excluded.code,
+    changes = excluded.changes,
+    summary = excluded.summary,
+    checks = excluded.checks,
+    ai_provider = excluded.ai_provider,
+    ai_model = excluded.ai_model,
+    generated_at = excluded.generated_at`;
 
+export function createCodeActionModel(db) {
   return {
-    save({ reviewId, action, code, changes, summary, checks, aiProvider, aiModel }) {
-      upsertStatement.run({
-        reviewId,
-        action,
-        code,
-        changes: toJson(changes, []),
-        summary: summary ?? '',
-        checks: toJson(checks, {}),
-        aiProvider: aiProvider ?? null,
-        aiModel: aiModel ?? null,
+    async save({ reviewId, action, code, changes, summary, checks, aiProvider, aiModel }) {
+      await db.execute({
+        sql: UPSERT_SQL,
+        args: {
+          reviewId,
+          action,
+          code,
+          changes: toJson(changes, []),
+          summary: summary ?? '',
+          checks: toJson(checks, {}),
+          aiProvider: aiProvider ?? null,
+          aiModel: aiModel ?? null,
+        },
       });
       return this.find(reviewId, action);
     },
 
-    find(reviewId, action) {
-      const row = findStatement.get(reviewId, action);
-      return row ? rowToCodeAction(row) : null;
+    async find(reviewId, action) {
+      const { rows } = await db.execute({
+        sql: 'SELECT * FROM code_actions WHERE review_id = ? AND action = ?',
+        args: [reviewId, action],
+      });
+      return rows.length ? rowToCodeAction(rows[0]) : null;
     },
 
     // { correct: CodeAction | null, improve: CodeAction | null }
-    findByReview(reviewId) {
+    async findByReview(reviewId) {
       const result = Object.fromEntries(CODE_ACTIONS.map((action) => [action, null]));
-      for (const row of listStatement.all(reviewId)) result[row.action] = rowToCodeAction(row);
+      const { rows } = await db.execute({ sql: 'SELECT * FROM code_actions WHERE review_id = ?', args: [reviewId] });
+      for (const row of rows) result[row.action] = rowToCodeAction(row);
       return result;
     },
   };

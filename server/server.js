@@ -14,14 +14,14 @@ const { createAiReviewService } = await import('./services/aiReviewService.js');
 const { createApp } = await import('./app.js');
 const { logger } = await import('./utils/logger.js');
 
-const db = createDatabase(config.databasePath);
+const db = await createDatabase(config.database);
 const aiReviewService = createAiReviewService(createAiProviders(config.ai), { skipped: config.ai.chain.skipped });
 const app = createApp({ db, aiReviewService, config });
 
 const server = app.listen(config.port, () => {
   const { chain } = aiReviewService.info();
   logger.info(`Code Review Assistant API running on http://localhost:${config.port}`);
-  logger.info(`Database: ${config.databasePath}`);
+  logger.info(`Database: ${config.database.url}`);
   if (chain.length) {
     logger.info(`AI providers (tried in this order): ${chain.map((p) => `${p.label} [${p.model}]`).join(' -> ')}`);
   } else {

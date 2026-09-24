@@ -6,8 +6,8 @@ import { SUPPORTED_LANGUAGES } from '../utils/constants.js';
 
 export function createHealthController({ db, aiReviewService, limits }) {
   return {
-    check(req, res) {
-      const healthy = isDatabaseHealthy(db);
+    async check(req, res) {
+      const healthy = await isDatabaseHealthy(db);
       res.status(healthy ? 200 : 503).json({
         success: healthy,
         data: {

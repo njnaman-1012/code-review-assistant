@@ -23,8 +23,11 @@ export function createApp({ db, aiReviewService, config, analyzeCode }) {
 
   const reviewModel = createReviewModel(db);
   const codeActionModel = createCodeActionModel(db);
-  const reviewService = createReviewService({ reviewModel, codeActionModel, aiReviewService, analyzeCode });
-  const codeActionService = createCodeActionService({ reviewModel, codeActionModel, aiReviewService, analyzeCode });
+  const aiTimeBudgetMs = config.ai?.timeBudgetMs || 0;
+  const reviewService = createReviewService({ reviewModel, codeActionModel, aiReviewService, analyzeCode, aiTimeBudgetMs });
+  const codeActionService = createCodeActionService({
+    reviewModel, codeActionModel, aiReviewService, analyzeCode, ...(aiTimeBudgetMs ? { timeBudgetMs: aiTimeBudgetMs } : {}),
+  });
   const { apiLimiter, reviewLimiter, codeActionLimiter } = createRateLimiters(config.rateLimit);
 
   // ---- security & parsing middleware

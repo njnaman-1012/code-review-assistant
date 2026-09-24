@@ -51,13 +51,15 @@ export function createOpenAiCompatibleProvider({
     maxRetries: 1, // fail over to the next provider quickly instead of waiting
   });
 
-  async function complete(messages, jsonMode) {
+  // timeLeftMs: the request must finish within the time left in the review's budget.
+  async function complete(messages, jsonMode, timeLeftMs) {
+    const options = timeLeftMs ? { timeout: Math.min(timeoutMs, timeLeftMs), maxRetries: 0 } : undefined;
     return client.chat.completions.create({
       model,
       messages,
       ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
-    });
+    }, options);
   }
 
   return {
@@ -67,7 +69,7 @@ export function createOpenAiCompatibleProvider({
 
     // `shapeHint` describes the expected JSON (the review shape by default,
     // or the shape of a code correction / improvement).
-    async generateJson({ system, prompt, shapeHint = JSON_SHAPE_HINT }) {
+    async generateJson({ system, prompt, shapeHint = JSON_SHAPE_HINT, timeLeftMs }) {
       const messages = [
         { role: 'system', content: system },
         { role: 'user', content: `${prompt}\n\n${shapeHint}` },
@@ -75,12 +77,12 @@ export function createOpenAiCompatibleProvider({
 
       let completion;
       try {
-        completion = await complete(messages, true);
+        completion = await complete(messages, true, timeLeftMs);
       } catch (error) {
         // Some free models do not support JSON mode; the prompt still asks for JSON.
         if (!isJsonModeUnsupported(error)) throw mapError(error);
         try {
-          completion = await complete(messages, false);
+          completion = await complete(messages, false, timeLeftMs);
         } catch (retryError) {
           throw mapError(retryError);
         }

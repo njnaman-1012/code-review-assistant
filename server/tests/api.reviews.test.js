@@ -11,7 +11,7 @@ function postReview(app, body) {
 describe('POST /api/reviews - review creation', () => {
   test('creates a complete review with static + AI results', async () => {
     const provider = createTestProvider(validAiReview());
-    const { app } = createTestApp({ provider });
+    const { app } = await createTestApp({ provider });
     const res = await postReview(app, { language: 'python', code: PYTHON_CODE });
 
     assert.equal(res.status, 201);
@@ -41,7 +41,7 @@ describe('POST /api/reviews - review creation', () => {
   });
 
   test('accepts language aliases such as "C++" and "js"', async () => {
-    const { app } = createTestApp();
+    const { app } = await createTestApp();
     const cpp = await postReview(app, { language: 'C++', code: 'int main() { return 0; }' });
     const js = await postReview(app, { language: 'js', code: 'console.log(1);' });
     assert.equal(cpp.status, 201);
@@ -50,7 +50,7 @@ describe('POST /api/reviews - review creation', () => {
   });
 
   test('works without an AI provider (static analysis only)', async () => {
-    const { app } = createTestApp();
+    const { app } = await createTestApp();
     const res = await postReview(app, { language: 'python', code: PYTHON_CODE });
     assert.equal(res.status, 201);
     assert.equal(res.body.data.ai.status, 'unavailable');
@@ -61,7 +61,7 @@ describe('POST /api/reviews - review creation', () => {
 
   test('falls back to static analysis when the AI call fails', async () => {
     const provider = createTestProvider(new AiServiceError('AI_TIMEOUT', 'took too long (check AI_TIMEOUT_MS in server/.env).'));
-    const { app } = createTestApp({ provider });
+    const { app } = await createTestApp({ provider });
     const res = await postReview(app, { language: 'python', code: PYTHON_CODE });
     assert.equal(res.status, 201);
     assert.equal(res.body.data.ai.status, 'failed');
@@ -72,7 +72,7 @@ describe('POST /api/reviews - review creation', () => {
   });
 
   test('review responses never reveal which AI provider or model was used', async () => {
-    const { app } = createTestApp({ provider: createTestProvider(validAiReview()) });
+    const { app } = await createTestApp({ provider: createTestProvider(validAiReview()) });
     const { id } = (await postReview(app, { language: 'python', code: PYTHON_CODE })).body.data;
     for (const res of [await request(app).get(`/api/reviews/${id}`), await request(app).get('/api/reviews')]) {
       const body = JSON.stringify(res.body);
@@ -84,7 +84,7 @@ describe('POST /api/reviews - review creation', () => {
 
   test('retries once when the AI returns invalid JSON', async () => {
     const provider = createTestProvider((call) => (call === 1 ? 'this is not json' : validAiReview()));
-    const { app } = createTestApp({ provider });
+    const { app } = await createTestApp({ provider });
     const res = await postReview(app, { language: 'python', code: PYTHON_CODE });
     assert.equal(provider.calls.length, 2);
     assert.equal(res.body.data.ai.status, 'completed');
@@ -93,7 +93,7 @@ describe('POST /api/reviews - review creation', () => {
 
   test('marks AI as failed when every attempt returns an invalid response', async () => {
     const provider = createTestProvider({ summary: '' });
-    const { app } = createTestApp({ provider });
+    const { app } = await createTestApp({ provider });
     const res = await postReview(app, { language: 'python', code: PYTHON_CODE });
     assert.equal(res.status, 201);
     assert.equal(provider.calls.length, 2);
@@ -101,8 +101,10 @@ describe('POST /api/reviews - review creation', () => {
   });
 });
 
+const { app: validationApp } = await createTestApp();
+
 describe('POST /api/reviews - validation', () => {
-  const { app } = createTestApp();
+  const app = validationApp;
 
   test('rejects empty code', async () => {
     const res = await postReview(app, { language: 'python', code: '' });
@@ -148,7 +150,7 @@ describe('POST /api/reviews - validation', () => {
 
 describe('Review retrieval, listing, deletion and reports', () => {
   test('lists, retrieves and deletes reviews', async () => {
-    const { app } = createTestApp({ provider: createTestProvider(validAiReview()) });
+    const { app } = await createTestApp({ provider: createTestProvider(validAiReview()) });
     const created = (await postReview(app, { language: 'python', code: PYTHON_CODE })).body.data;
     await postReview(app, { language: 'javascript', code: 'var a = 1;' });
 
@@ -176,14 +178,14 @@ describe('Review retrieval, listing, deletion and reports', () => {
   });
 
   test('rejects invalid review ids', async () => {
-    const { app } = createTestApp();
+    const { app } = await createTestApp();
     const res = await request(app).get('/api/reviews/abc');
     assert.equal(res.status, 400);
     assert.equal(res.body.error.code, 'INVALID_ID');
   });
 
   test('downloads HTML and Markdown reports', async () => {
-    const { app } = createTestApp({ provider: createTestProvider(validAiReview()) });
+    const { app } = await createTestApp({ provider: createTestProvider(validAiReview()) });
     const { id } = (await postReview(app, { language: 'python', code: PYTHON_CODE })).body.data;
 
     const html = await request(app).get(`/api/reviews/${id}/report?format=html`);
@@ -204,7 +206,7 @@ describe('Review retrieval, listing, deletion and reports', () => {
   });
 
   test('HTML report escapes user code (no script injection)', async () => {
-    const { app } = createTestApp();
+    const { app } = await createTestApp();
     const code = 'console.log("</script><script>alert(1)</script>");';
     const { id } = (await postReview(app, { language: 'javascript', code })).body.data;
     const html = await request(app).get(`/api/reviews/${id}/report?format=html`);

@@ -46,7 +46,7 @@ export function createAnthropicProvider({ name = 'anthropic', label = 'Anthropic
     model,
 
     // Sends the prompt and returns the raw JSON text produced by the model.
-    async generateJson({ system, prompt, schema }) {
+    async generateJson({ system, prompt, schema, timeLeftMs }) {
       // Structured output: the API constrains the answer to this JSON schema.
       const params = {
         model,
@@ -55,6 +55,8 @@ export function createAnthropicProvider({ name = 'anthropic', label = 'Anthropic
         messages: [{ role: 'user', content: prompt }],
         output_config: { format: { type: 'json_schema', schema: zodOutputFormat(schema).schema } },
       };
+      // The request must finish within the time left in the review's budget.
+      const requestOptions = timeLeftMs ? { timeout: Math.min(timeoutMs, timeLeftMs), maxRetries: 0 } : undefined;
 
       let message;
       try {
@@ -62,9 +64,9 @@ export function createAnthropicProvider({ name = 'anthropic', label = 'Anthropic
         // waits for the complete response.
         message = useFallback
           ? await client.beta.messages
-            .stream({ ...params, betas: [FALLBACK_BETA, STRUCTURED_OUTPUT_BETA], fallbacks: 'default' })
+            .stream({ ...params, betas: [FALLBACK_BETA, STRUCTURED_OUTPUT_BETA], fallbacks: 'default' }, requestOptions)
             .finalMessage()
-          : await client.messages.stream(params).finalMessage();
+          : await client.messages.stream(params, requestOptions).finalMessage();
       } catch (error) {
         throw mapError(error);
       }

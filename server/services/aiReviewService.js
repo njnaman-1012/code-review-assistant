@@ -21,10 +21,14 @@ import { AiServiceError } from '../utils/AppError.js';
 import { logger } from '../utils/logger.js';
 
 const ATTEMPTS_PER_PROVIDER = 2;
+// Do not start an AI request with less time than this left in the budget.
+const MIN_ATTEMPT_MS = 10000;
 
-function outOfTime(deadline) {
-  return deadline && Date.now() > deadline;
+// Milliseconds left until the deadline (Infinity when there is no deadline).
+function timeLeft(deadline) {
+  return deadline ? deadline - Date.now() : Infinity;
 }
+const outOfTimeError = () => new AiServiceError('AI_TIMEOUT', 'ran out of time before a provider returned a usable answer.');
 
 // One provider: ask, validate the answer, and ask once more (explaining what
 // was wrong) if the answer cannot be used.
@@ -32,10 +36,16 @@ async function runWithProvider(provider, task) {
   let prompt = task.prompt;
   let lastError;
   for (let attempt = 1; attempt <= ATTEMPTS_PER_PROVIDER; attempt += 1) {
-    if (attempt > 1 && outOfTime(task.deadline)) break;
+    const remaining = timeLeft(task.deadline);
+    if (remaining < MIN_ATTEMPT_MS) {
+      lastError ??= outOfTimeError();
+      break;
+    }
     const started = Date.now();
     const response = await provider.generateJson({
       system: task.system, prompt, schema: task.schema, shapeHint: task.shapeHint, operation: task.operation,
+      // The request may not run longer than the time left in the budget.
+      timeLeftMs: Number.isFinite(remaining) ? remaining : undefined,
     });
     try {
       const result = await task.validate(response.text);
@@ -71,8 +81,8 @@ export function createAiReviewService(providers, { skipped = [] } = {}) {
     const failures = [];
     let lastError;
     for (const provider of chain) {
-      if (outOfTime(task.deadline)) {
-        lastError = new AiServiceError('AI_TIMEOUT', 'ran out of time before a provider returned a usable answer.');
+      if (timeLeft(task.deadline) < MIN_ATTEMPT_MS) {
+        lastError = outOfTimeError();
         break;
       }
       const label = provider.label ?? provider.name;
@@ -126,13 +136,14 @@ export function createAiReviewService(providers, { skipped = [] } = {}) {
       };
     },
 
-    async reviewCode({ language, code, staticResult }) {
+    async reviewCode({ language, code, staticResult, deadline }) {
       const { result, ...meta } = await runOnChain({
         operation: 'review',
         system: SYSTEM_PROMPT,
         prompt: buildReviewPrompt({ language, code, staticResult }),
         schema: aiReviewSchema,
         validate: (text) => validateAiReview(text),
+        deadline,
       });
       return { review: result, ...meta };
     },

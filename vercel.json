@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install",
+  "buildCommand": "npm run build",
+  "outputDirectory": "client/dist",
+  "functions": {
+    "api/index.mjs": {
+      "maxDuration": 300,
+      "includeFiles": "{server/database/schema.sql,node_modules/web-tree-sitter/tree-sitter.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-python.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-java.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-cpp.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-javascript.wasm}"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}

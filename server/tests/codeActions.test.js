@@ -128,7 +128,7 @@ const nonBlankLines = (code) => code.split('\n').filter((line) => line.trim()).l
 
 async function setup(handlers) {
   const provider = createRoutingProvider({ review: validAiReview(), ...handlers });
-  const { app, db } = createTestApp({ provider });
+  const { app, db } = await createTestApp({ provider });
   const created = await request(app).post('/api/reviews').send({ language: 'python', code: LONG_CODE });
   assert.equal(created.status, 201, 'review creation still works');
   return { app, db, provider, review: created.body.data };
@@ -193,7 +193,7 @@ describe('Fix / Correct Code', () => {
       assert.equal(res.status, 502, `rejected: ${code.slice(0, 40)}`);
       assert.equal(res.body.error.code, 'AI_INCOMPLETE_CODE');
       assert.match(res.body.error.message, /did not return the complete source code/);
-      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM code_actions').get().n, 0, 'nothing was saved');
+      assert.equal((await db.execute('SELECT COUNT(*) AS n FROM code_actions')).rows[0].n, 0, 'nothing was saved');
     }
   });
 
@@ -294,9 +294,9 @@ describe('Saved results', () => {
   test('deleting a review also deletes its generated code', async () => {
     const { app, db, review } = await setup({ correct: correction() });
     await post(app, review.id, 'correct');
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM code_actions').get().n, 1);
+    assert.equal((await db.execute('SELECT COUNT(*) AS n FROM code_actions')).rows[0].n, 1);
     await request(app).delete(`/api/reviews/${review.id}`);
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM code_actions').get().n, 0);
+    assert.equal((await db.execute('SELECT COUNT(*) AS n FROM code_actions')).rows[0].n, 0);
   });
 });
 
@@ -306,7 +306,7 @@ describe('Code action requests', () => {
     assert.equal((await post(app, 999, 'correct')).status, 404);
     assert.equal((await post(app, 'abc', 'improve')).status, 400);
 
-    const noAi = createTestApp();
+    const noAi = await createTestApp();
     const created = await request(noAi.app).post('/api/reviews').send({ language: 'python', code: LONG_CODE });
     const res = await post(noAi.app, created.body.data.id, 'correct');
     assert.equal(res.status, 503);

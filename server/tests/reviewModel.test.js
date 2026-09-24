@@ -23,16 +23,16 @@ function sampleReview(overrides = {}) {
   };
 }
 
-test('database opens and passes the health check', () => {
-  const db = createDatabase(':memory:');
-  assert.equal(isDatabaseHealthy(db), true);
+test('database opens and passes the health check', async () => {
+  const db = await createDatabase({ url: ':memory:' });
+  assert.equal(await isDatabaseHealthy(db), true);
   db.close();
-  assert.equal(isDatabaseHealthy(db), false);
+  assert.equal(await isDatabaseHealthy(db), false);
 });
 
-test('create() stores a review and JSON fields round-trip correctly', () => {
-  const model = createReviewModel(createDatabase(':memory:'));
-  const saved = model.create(sampleReview());
+test('create() stores a review and JSON fields round-trip correctly', async () => {
+  const model = createReviewModel(await createDatabase({ url: ':memory:' }));
+  const saved = await model.create(sampleReview());
 
   assert.equal(saved.id, 1);
   assert.equal(saved.issueCount, 1);
@@ -44,23 +44,23 @@ test('create() stores a review and JSON fields round-trip correctly', () => {
   assert.match(saved.createdAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
-test('findAll() returns summaries newest first with paging', () => {
-  const model = createReviewModel(createDatabase(':memory:'));
-  model.create(sampleReview({ summary: 'first' }));
-  model.create(sampleReview({ summary: 'second' }));
-  model.create(sampleReview({ summary: 'third' }));
+test('findAll() returns summaries newest first with paging', async () => {
+  const model = createReviewModel(await createDatabase({ url: ':memory:' }));
+  await model.create(sampleReview({ summary: 'first' }));
+  await model.create(sampleReview({ summary: 'second' }));
+  await model.create(sampleReview({ summary: 'third' }));
 
-  const page = model.findAll({ limit: 2, offset: 0 });
+  const page = await model.findAll({ limit: 2, offset: 0 });
   assert.deepEqual(page.map((r) => r.summary), ['third', 'second']);
   assert.equal(page[0].qualityScore, 98);
-  assert.equal(model.findAll({ limit: 2, offset: 2 }).length, 1);
-  assert.equal(model.count(), 3);
+  assert.equal((await model.findAll({ limit: 2, offset: 2 })).length, 1);
+  assert.equal(await model.count(), 3);
 });
 
-test('deleteById() removes a review and reports missing ids', () => {
-  const model = createReviewModel(createDatabase(':memory:'));
-  const { id } = model.create(sampleReview());
-  assert.equal(model.deleteById(id), true);
-  assert.equal(model.findById(id), null);
-  assert.equal(model.deleteById(id), false);
+test('deleteById() removes a review and reports missing ids', async () => {
+  const model = createReviewModel(await createDatabase({ url: ':memory:' }));
+  const { id } = await model.create(sampleReview());
+  assert.equal(await model.deleteById(id), true);
+  assert.equal(await model.findById(id), null);
+  assert.equal(await model.deleteById(id), false);
 });

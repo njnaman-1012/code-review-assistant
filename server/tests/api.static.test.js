@@ -17,7 +17,7 @@ fs.writeFileSync(path.join(dist, 'assets', 'app.js'), 'console.log(1);');
 after(() => fs.rmSync(dist, { recursive: true, force: true }));
 
 const app = createApp({
-  db: createDatabase(':memory:'),
+  db: await createDatabase({ url: ':memory:' }),
   aiReviewService: createAiReviewService(null),
   config: { ...testConfig, clientDistPath: dist },
 });

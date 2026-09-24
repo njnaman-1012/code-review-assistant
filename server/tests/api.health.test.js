@@ -4,7 +4,7 @@ import request from 'supertest';
 import { createTestApp, createTestProvider, validAiReview } from './helpers.js';
 
 test('GET /api/health reports service and AI availability', async () => {
-  const { app } = createTestApp();
+  const { app } = await createTestApp();
   const res = await request(app).get('/api/health');
 
   assert.equal(res.status, 200);
@@ -15,7 +15,7 @@ test('GET /api/health reports service and AI availability', async () => {
 });
 
 test('GET /api/health does not reveal internal details', async () => {
-  const { app } = createTestApp({ provider: createTestProvider(validAiReview()) });
+  const { app } = await createTestApp({ provider: createTestProvider(validAiReview()) });
   const res = await request(app).get('/api/health');
   assert.deepEqual(res.body.data.ai, { available: true });
   const body = JSON.stringify(res.body);
@@ -25,14 +25,14 @@ test('GET /api/health does not reveal internal details', async () => {
 });
 
 test('unknown API routes return a JSON 404', async () => {
-  const { app } = createTestApp();
+  const { app } = await createTestApp();
   const res = await request(app).get('/api/does-not-exist');
   assert.equal(res.status, 404);
   assert.equal(res.body.error.code, 'NOT_FOUND');
 });
 
 test('security headers are set and x-powered-by is hidden', async () => {
-  const { app } = createTestApp();
+  const { app } = await createTestApp();
   const res = await request(app).get('/api/health');
   assert.equal(res.headers['x-powered-by'], undefined);
   assert.equal(res.headers['x-content-type-options'], 'nosniff');
