@@ -1,0 +1,24 @@
+{
+  "name": "code-review-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI-assisted Code Review Assistant - undergraduate Software Engineering project",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:server": "npm run dev -w server",
+    "dev:client": "npm run dev -w client",
+    "build": "npm run build -w client",
+    "start": "npm start -w server",
+    "test": "npm test -w server"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

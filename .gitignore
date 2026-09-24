@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build output
+client/dist/
+
+# Secrets - never commit your real API key
+.env
+!.env.example
+
+# SQLite database (created automatically at runtime)
+*.db
+*.db-wal
+*.db-shm
+
+# Logs and OS files
+*.log
+.DS_Store
+Thumbs.db
+coverage/

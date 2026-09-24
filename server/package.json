@@ -1,0 +1,33 @@
+{
+  "name": "code-review-assistant-server",
+  "version": "1.0.0",
+  "description": "Express REST API, static analysis engine and AI review engine for the Code Review Assistant",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.3",
+    "eslint": "^10.11.0",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0",
+    "globals": "^17.12.0",
+    "helmet": "^8.3.0",
+    "openai": "^7.23.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.25.10",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "supertest": "^7.3.0"
+  }
+}
