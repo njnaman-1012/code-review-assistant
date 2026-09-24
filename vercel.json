@@ -6,7 +6,7 @@
   "functions": {
     "api/index.mjs": {
       "maxDuration": 300,
-      "includeFiles": "{server/database/schema.sql,node_modules/web-tree-sitter/tree-sitter.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-python.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-java.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-cpp.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-javascript.wasm}"
+      "includeFiles": "{server/database/schema.sql,node_modules/web-tree-sitter/*.wasm,node_modules/tree-sitter-wasms/out/tree-sitter-{python,java,cpp,javascript}.wasm}"
     }
   },
   "rewrites": [
