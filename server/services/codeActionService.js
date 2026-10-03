@@ -11,7 +11,9 @@
 //        ▼
 //   code_actions table ─► the complete corrected / improved code for the UI
 //
-// The original code of the review is never modified.
+// The original code of the review is never modified. Only the owner of a
+// review can generate code for it, and the AI request is charged to the
+// owner's token allowance.
 import { analyzeCode as defaultAnalyzer } from './staticAnalysis/index.js';
 import { checkLanguageMatch } from './languageDetector.js';
 import { findIncompleteCode } from './ai/codeCompleteness.js';
@@ -49,7 +51,7 @@ function matchTrailingNewline(code, original) {
 }
 
 export function createCodeActionService({
-  reviewModel, codeActionModel, aiReviewService, analyzeCode = defaultAnalyzer, timeBudgetMs = DEFAULT_TIME_BUDGET_MS,
+  reviewModel, codeActionModel, aiReviewService, usageService, analyzeCode = defaultAnalyzer, timeBudgetMs = DEFAULT_TIME_BUDGET_MS,
 }) {
   const running = new Set(); // "reviewId:action" pairs being generated right now
 
@@ -81,15 +83,10 @@ export function createCodeActionService({
   }
 
   return {
-    // { correct: CodeAction | null, improve: CodeAction | null }
-    async listForReview(reviewId) {
-      return codeActionModel.findByReview(reviewId);
-    },
-
-    async generate(reviewId, action) {
+    async generate(reviewId, action, userId) {
       if (!CODE_ACTIONS.includes(action)) throw new AppError('Unknown code action.', 400, 'INVALID_ACTION');
 
-      const review = await reviewModel.findById(reviewId);
+      const review = await reviewModel.findById(reviewId, userId);
       if (!review) throw new AppError(`Review #${reviewId} was not found.`, 404, 'REVIEW_NOT_FOUND');
 
       const language = normalizeLanguage(review.language);
@@ -110,13 +107,14 @@ export function createCodeActionService({
         const operation = action === 'correct' ? aiReviewService.correctCode : aiReviewService.improveCode;
         let result;
         try {
-          result = await operation({
+          // No tokens left -> TOKEN_LIMIT_REACHED, and the AI is not called.
+          result = await usageService.runMetered({ userId, feature: action, code: review.originalCode }, () => operation({
             language,
             code: review.originalCode,
             review,
             deadline: Date.now() + timeBudgetMs,
             verify: (generated) => verifyGeneratedCode({ review, language, action, generated }),
-          });
+          }));
         } catch (error) {
           if (!(error instanceof AiServiceError)) throw error;
           logger.warn(`Code ${action} failed`, { reviewId, code: error.code, detail: error.userMessage });

@@ -26,6 +26,11 @@ export function resolveProviderChain(env = process.env) {
     const apiKey = (preset.keyEnv && env[preset.keyEnv]) || (single ? env.AI_API_KEY : '') || '';
     const model = (preset.modelEnv && env[preset.modelEnv]) || (single ? env.AI_MODEL : '') || preset.defaultModel;
     const baseUrl = (single && env.AI_BASE_URL) || preset.baseUrl;
+    // e.g. GEMINI_FALLBACK_MODELS=gemini-3.5-flash,gemini-3.5-flash-lite ("none" turns it off)
+    const fallbackSetting = preset.fallbackModelsEnv ? env[preset.fallbackModelsEnv] : undefined;
+    const fallbackModels = (fallbackSetting ? fallbackSetting.split(',') : preset.fallbackModels ?? [])
+      .map((name) => name.trim())
+      .filter((name) => name && name.toLowerCase() !== 'none' && name !== model);
 
     if (preset.needsKey && !apiKey) {
       if (setting !== 'auto') skipped.push({ name, reason: `no API key (set ${preset.keyEnv || 'AI_API_KEY'})` });
@@ -43,6 +48,7 @@ export function resolveProviderChain(env = process.env) {
       free: preset.free,
       apiKey,
       model,
+      fallbackModels,
       baseUrl,
       headers: preset.headers,
       maxOutputTokens: preset.maxOutputTokens,

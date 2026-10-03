@@ -349,3 +349,31 @@ select:focus, .search-input:focus { outline: 2px solid #a5b4fc; border-color: va
 .change-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .change-list li { display: flex; gap: 8px; align-items: baseline; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--radius-small); padding: 5px 10px; font-size: 0.88rem; font-weight: 600; color: #14532d; }
 .change-list li .icon { color: var(--success); flex-shrink: 0; position: relative; top: 2px; }
+
+/* ---- Accounts: login / register pages, user block in the header, AI token bar ---- */
+.auth-page { align-items: center; }
+.auth-card { width: min(420px, 100%); display: flex; flex-direction: column; gap: 16px; margin-top: 24px; }
+.auth-card h1 { font-size: 1.5rem; margin-bottom: 4px; }
+.auth-form { display: flex; flex-direction: column; gap: 14px; }
+.text-input { border: 1px solid var(--border); border-radius: var(--radius-small); padding: 9px 11px; background: var(--surface); color: var(--text); font-size: 0.95rem; font-weight: 400; min-height: 40px; }
+.text-input:focus { outline: 2px solid #a5b4fc; border-color: var(--primary); }
+.field-hint { font-weight: 400; color: var(--muted); font-size: 0.8rem; }
+.header-user { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.user-email { font-size: 0.85rem; color: var(--muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.token-meter { display: flex; flex-direction: column; gap: 4px; min-width: 150px; text-decoration: none; color: #334155; font-size: 0.78rem; line-height: 1.2; }
+.token-bar { display: block; height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.token-bar.large { height: 10px; }
+.token-bar-fill { display: block; height: 100%; border-radius: 999px; background: #22c55e; transition: width 0.3s; }
+.low .token-bar-fill { background: #f59e0b; }
+.empty .token-bar-fill { background: #ef4444; }
+.token-card .card-head { margin-bottom: 8px; }
+.token-percent { font-size: 0.9rem; color: var(--success); }
+.low .token-percent, .low.token-meter strong { color: var(--warning); }
+.empty .token-percent, .empty.token-meter strong { color: var(--danger); }
+.token-stats { display: flex; gap: 28px; flex-wrap: wrap; margin: 10px 0 0; }
+.token-stats dt { font-size: 0.78rem; color: var(--muted); font-weight: 600; }
+.token-stats dd { margin: 0; font-weight: 700; }
+.token-note { margin: 10px 0 0; font-size: 0.88rem; font-weight: 600; color: var(--warning); }
+.empty .token-note { color: var(--danger); }
+.otp-input { font-family: var(--mono); font-size: 1.5rem; letter-spacing: 0.45em; text-align: center; padding: 10px 8px; }
+.auth-links { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }

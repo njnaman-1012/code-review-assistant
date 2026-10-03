@@ -25,7 +25,36 @@ export async function createDatabase({ url, authToken }) {
   if (isLocalFile) await db.execute('PRAGMA journal_mode = WAL'); // better concurrency for reads during writes
   if (url.startsWith('file:') || url === ':memory:') await db.execute('PRAGMA foreign_keys = ON');
   await db.executeMultiple(fs.readFileSync(schemaPath, 'utf8'));
+  await migrate(db);
   return db;
+}
+
+async function hasColumn(db, table, column) {
+  const { rows } = await db.execute(`PRAGMA table_info(${table})`);
+  return rows.some((row) => row.name === column);
+}
+
+// Adds a column that an earlier version did not have. `after` are statements
+// that run together with it (one transaction). Two server instances may start
+// at the same time; the second one finds the column already added.
+async function addColumn(db, table, column, definition, after = []) {
+  if (await hasColumn(db, table, column)) return;
+  try {
+    await db.batch([`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, ...after], 'write');
+  } catch (error) {
+    if (!/duplicate column/i.test(error.message ?? '')) throw error;
+  }
+}
+
+// Brings a database created by an earlier version up to date. No row is deleted.
+async function migrate(db) {
+  // Reviews saved before user accounts existed have no owner (user_id NULL), so no user can see them.
+  await addColumn(db, 'reviews', 'user_id', 'INTEGER REFERENCES users (id) ON DELETE CASCADE');
+  await db.execute('CREATE INDEX IF NOT EXISTS idx_reviews_user ON reviews (user_id, created_at DESC)');
+
+  // Accounts created before e-mail verification existed stay usable: they are marked as verified.
+  await addColumn(db, 'users', 'email_verified', 'INTEGER NOT NULL DEFAULT 0', ['UPDATE users SET email_verified = 1']);
+  await addColumn(db, 'users', 'disabled', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 export async function isDatabaseHealthy(db) {

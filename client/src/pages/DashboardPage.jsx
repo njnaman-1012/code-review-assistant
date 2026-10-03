@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import Icon from '../components/Icon.jsx';
 import { AiStatusBadge } from '../components/Badges.jsx';
+import TokenUsage from '../components/TokenUsage.jsx';
 import { LoadingState, ErrorAlert } from '../components/Feedback.jsx';
 import { api } from '../services/api.js';
 import { useFetch } from '../hooks/useFetch.js';
@@ -60,6 +61,8 @@ export default function DashboardPage() {
           <ServiceStatus />
         </div>
       </section>
+
+      <TokenUsage />
 
       <div className="stat-grid">
         <div className="stat"><span className="stat-label">Reviews saved</span><strong className="stat-value">{data?.total ?? '-'}</strong></div>

@@ -45,10 +45,10 @@ export function createReviewValidator({ maxCodeChars, maxCodeLines }) {
   };
 }
 
-// Validates the :id route parameter.
+// Validates the :id route parameter: plain digits only ("0x1", "1e0" or "1 OR 1=1" are refused).
 export function validateIdParam(req, res, next) {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id) || id <= 0) {
+  const id = /^[1-9]\d{0,14}$/.test(req.params.id) ? Number(req.params.id) : NaN;
+  if (!Number.isInteger(id)) {
     return next(new AppError('Review ID must be a positive whole number.', 400, 'INVALID_ID'));
   }
   req.reviewId = id;

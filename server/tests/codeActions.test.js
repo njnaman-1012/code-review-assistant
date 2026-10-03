@@ -2,7 +2,6 @@
 // source file, validated before it is shown and saved with the review.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import request from 'supertest';
 import { AiServiceError } from '../utils/AppError.js';
 import { createTestApp, createRoutingProvider, validAiReview } from './helpers.js';
 
@@ -128,21 +127,21 @@ const nonBlankLines = (code) => code.split('\n').filter((line) => line.trim()).l
 
 async function setup(handlers) {
   const provider = createRoutingProvider({ review: validAiReview(), ...handlers });
-  const { app, db } = await createTestApp({ provider });
-  const created = await request(app).post('/api/reviews').send({ language: 'python', code: LONG_CODE });
+  const { agent, db } = await createTestApp({ provider });
+  const created = await agent.post('/api/reviews').send({ language: 'python', code: LONG_CODE });
   assert.equal(created.status, 201, 'review creation still works');
-  return { app, db, provider, review: created.body.data };
+  return { agent, db, provider, review: created.body.data };
 }
 
 // Sends the same body as the browser client (an empty JSON object).
-const post = (app, id, action) => request(app).post(`/api/reviews/${id}/${action}`).send({});
+const post = (agent, id, action) => agent.post(`/api/reviews/${id}/${action}`).send({});
 
 describe('Fix / Correct Code', () => {
   test('returns the COMPLETE corrected file for a 60+ line program, not only the changed lines', async () => {
-    const { app, provider, review } = await setup({ correct: correction() });
+    const { agent, provider, review } = await setup({ correct: correction() });
     assert.deepEqual(review.codeActions, { correct: null, improve: null }, 'a new review has no generated code yet');
 
-    const res = await post(app, review.id, 'correct');
+    const res = await post(agent, review.id, 'correct');
     assert.equal(res.status, 200);
     const result = res.body.data;
     assert.equal(result.action, 'correct');
@@ -170,8 +169,8 @@ describe('Fix / Correct Code', () => {
   });
 
   test('a snippet with only the changed lines is rejected and the AI is asked again', async () => {
-    const { app, provider, review } = await setup({ correct: (n) => (n === 1 ? SNIPPET_ONLY : correction()) });
-    const res = await post(app, review.id, 'correct');
+    const { agent, provider, review } = await setup({ correct: (n) => (n === 1 ? SNIPPET_ONLY : correction()) });
+    const res = await post(agent, review.id, 'correct');
     assert.equal(res.status, 200);
     assert.equal(res.body.data.code, CORRECTED_CODE);
     const calls = provider.callsFor('correct');
@@ -188,8 +187,8 @@ describe('Fix / Correct Code', () => {
       `Here is the corrected portion:\n${CORRECTED_CODE}`,
     ];
     for (const code of placeholders) {
-      const { app, db, review } = await setup({ correct: correction({ correctedCode: code }) });
-      const res = await post(app, review.id, 'correct');
+      const { agent, db, review } = await setup({ correct: correction({ correctedCode: code }) });
+      const res = await post(agent, review.id, 'correct');
       assert.equal(res.status, 502, `rejected: ${code.slice(0, 40)}`);
       assert.equal(res.body.error.code, 'AI_INCOMPLETE_CODE');
       assert.match(res.body.error.message, /did not return the complete source code/);
@@ -199,36 +198,36 @@ describe('Fix / Correct Code', () => {
 
   test('code with a syntax error (for example a cut-off answer) is rejected', async () => {
     const cutOff = CORRECTED_CODE.slice(0, CORRECTED_CODE.indexOf('print("Top student:", name, score)') + 30);
-    const { app, review } = await setup({ correct: correction({ correctedCode: cutOff }) });
-    const res = await post(app, review.id, 'correct');
+    const { agent, review } = await setup({ correct: correction({ correctedCode: cutOff }) });
+    const res = await post(agent, review.id, 'correct');
     assert.equal(res.status, 502);
     assert.equal(res.body.error.code, 'AI_INCOMPLETE_CODE');
   });
 
   test('an empty code answer is rejected', async () => {
-    const { app, review } = await setup({ correct: correction({ correctedCode: '   ' }) });
-    const res = await post(app, review.id, 'correct');
+    const { agent, review } = await setup({ correct: correction({ correctedCode: '   ' }) });
+    const res = await post(agent, review.id, 'correct');
     assert.equal(res.status, 502);
     assert.equal(res.body.error.code, 'AI_EMPTY_CODE');
   });
 
   test('an invalid (non-JSON) AI answer is rejected', async () => {
-    const { app, review } = await setup({ correct: 'Sure! I fixed line 21, just add a check for an empty list.' });
-    const res = await post(app, review.id, 'correct');
+    const { agent, review } = await setup({ correct: 'Sure! I fixed line 21, just add a check for an empty list.' });
+    const res = await post(agent, review.id, 'correct');
     assert.equal(res.status, 502);
     assert.equal(res.body.error.code, 'AI_INVALID_RESPONSE');
   });
 
   test('code in a different programming language is rejected', async () => {
-    const { app, review } = await setup({ correct: correction({ language: 'java' }) });
-    const res = await post(app, review.id, 'correct');
+    const { agent, review } = await setup({ correct: correction({ language: 'java' }) });
+    const res = await post(agent, review.id, 'correct');
     assert.equal(res.status, 502);
     assert.equal(res.body.error.code, 'AI_WRONG_LANGUAGE');
   });
 
   test('an AI API failure returns a clear message without internal details', async () => {
-    const { app, review } = await setup({ correct: new AiServiceError('AI_TIMEOUT', 'took too long (check AI_TIMEOUT_MS in server/.env).') });
-    const res = await post(app, review.id, 'correct');
+    const { agent, review } = await setup({ correct: new AiServiceError('AI_TIMEOUT', 'took too long (check AI_TIMEOUT_MS in server/.env).') });
+    const res = await post(agent, review.id, 'correct');
     assert.equal(res.status, 504);
     assert.match(res.body.error.message, /took too long/);
     assert.ok(!/server\/\.env|test-provider|test-model|AI_TIMEOUT_MS/.test(JSON.stringify(res.body)));
@@ -237,8 +236,8 @@ describe('Fix / Correct Code', () => {
 
 describe('Improve Code', () => {
   test('returns the complete improved file in the same language', async () => {
-    const { app, provider, review } = await setup({ improve: improvement() });
-    const res = await post(app, review.id, 'improve');
+    const { agent, provider, review } = await setup({ improve: improvement() });
+    const res = await post(agent, review.id, 'improve');
     assert.equal(res.status, 200);
     const result = res.body.data;
     assert.equal(result.action, 'improve');
@@ -256,9 +255,9 @@ describe('Improve Code', () => {
   });
 
   test('Fix and Improve are separate AI operations from the review', async () => {
-    const { app, provider, review } = await setup({ correct: correction(), improve: improvement() });
-    await post(app, review.id, 'correct');
-    await post(app, review.id, 'improve');
+    const { agent, provider, review } = await setup({ correct: correction(), improve: improvement() });
+    await post(agent, review.id, 'correct');
+    await post(agent, review.id, 'improve');
     assert.deepEqual(provider.calls.map((call) => call.operation), ['review', 'correct', 'improve']);
     assert.notEqual(provider.callsFor('correct')[0].prompt, provider.callsFor('improve')[0].prompt);
   });
@@ -266,11 +265,11 @@ describe('Improve Code', () => {
 
 describe('Saved results', () => {
   test('the original code is unchanged and both results are saved with the review', async () => {
-    const { app, review } = await setup({ correct: correction(), improve: improvement() });
-    await post(app, review.id, 'correct');
-    await post(app, review.id, 'improve');
+    const { agent, review } = await setup({ correct: correction(), improve: improvement() });
+    await post(agent, review.id, 'correct');
+    await post(agent, review.id, 'improve');
 
-    const reopened = (await request(app).get(`/api/reviews/${review.id}`)).body.data;
+    const reopened = (await agent.get(`/api/reviews/${review.id}`)).body.data;
     assert.equal(reopened.originalCode, LONG_CODE, 'original code unchanged');
     assert.equal(reopened.issues.length, review.issues.length, 'review unchanged');
     assert.equal(reopened.improvedCode, review.improvedCode, 'the review\'s own improved code is unchanged');
@@ -284,31 +283,31 @@ describe('Saved results', () => {
 
   test('generating again replaces the previous version', async () => {
     const second = CORRECTED_CODE.replace('return 0.0', 'return 0');
-    const { app, review } = await setup({ correct: (n) => correction(n === 1 ? {} : { correctedCode: second }) });
-    await post(app, review.id, 'correct');
-    await post(app, review.id, 'correct');
-    const reopened = (await request(app).get(`/api/reviews/${review.id}`)).body.data;
+    const { agent, review } = await setup({ correct: (n) => correction(n === 1 ? {} : { correctedCode: second }) });
+    await post(agent, review.id, 'correct');
+    await post(agent, review.id, 'correct');
+    const reopened = (await agent.get(`/api/reviews/${review.id}`)).body.data;
     assert.equal(reopened.codeActions.correct.code, second);
   });
 
   test('deleting a review also deletes its generated code', async () => {
-    const { app, db, review } = await setup({ correct: correction() });
-    await post(app, review.id, 'correct');
+    const { agent, db, review } = await setup({ correct: correction() });
+    await post(agent, review.id, 'correct');
     assert.equal((await db.execute('SELECT COUNT(*) AS n FROM code_actions')).rows[0].n, 1);
-    await request(app).delete(`/api/reviews/${review.id}`);
+    await agent.delete(`/api/reviews/${review.id}`);
     assert.equal((await db.execute('SELECT COUNT(*) AS n FROM code_actions')).rows[0].n, 0);
   });
 });
 
 describe('Code action requests', () => {
   test('unknown review -> 404, invalid id -> 400, no AI provider -> 503', async () => {
-    const { app } = await setup({});
-    assert.equal((await post(app, 999, 'correct')).status, 404);
-    assert.equal((await post(app, 'abc', 'improve')).status, 400);
+    const { agent } = await setup({});
+    assert.equal((await post(agent, 999, 'correct')).status, 404);
+    assert.equal((await post(agent, 'abc', 'improve')).status, 400);
 
     const noAi = await createTestApp();
-    const created = await request(noAi.app).post('/api/reviews').send({ language: 'python', code: LONG_CODE });
-    const res = await post(noAi.app, created.body.data.id, 'correct');
+    const created = await noAi.agent.post('/api/reviews').send({ language: 'python', code: LONG_CODE });
+    const res = await post(noAi.agent, created.body.data.id, 'correct');
     assert.equal(res.status, 503);
     assert.match(res.body.error.message, /not available/);
   });
@@ -316,12 +315,12 @@ describe('Code action requests', () => {
   test('a duplicate request while the code is being generated is refused', async () => {
     let release;
     const pending = new Promise((resolve) => { release = resolve; });
-    const { app, provider, review } = await setup({ correct: () => pending.then(() => correction()) });
+    const { agent, provider, review } = await setup({ correct: () => pending.then(() => correction()) });
 
-    const first = post(app, review.id, 'correct').then((res) => res);
+    const first = post(agent, review.id, 'correct').then((res) => res);
     while (!provider.callsFor('correct').length) await new Promise((resolve) => setImmediate(resolve));
 
-    const duplicate = await post(app, review.id, 'correct');
+    const duplicate = await post(agent, review.id, 'correct');
     assert.equal(duplicate.status, 409);
     assert.equal(duplicate.body.error.code, 'ACTION_IN_PROGRESS');
 

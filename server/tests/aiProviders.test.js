@@ -1,6 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { resolveProviderChain } from '../services/ai/providers/resolveProviderChain.js';
+import { createOpenAiCompatibleProvider } from '../services/ai/providers/openaiCompatibleProvider.js';
 import { createAiReviewService } from '../services/aiReviewService.js';
 import { stripLineNumbers } from '../services/ai/aiResponseValidator.js';
 import { AiServiceError } from '../utils/AppError.js';
@@ -79,4 +81,77 @@ describe('Provider fallback', () => {
 test('stripLineNumbers removes copied "12 | " prefixes only when every line has one', () => {
   assert.equal(stripLineNumbers(' 9 | x = 1\n10 | y = 2'), 'x = 1\ny = 2');
   assert.equal(stripLineNumbers('x = a | b\ny = 2'), 'x = a | b\ny = 2');
+});
+
+describe('Model fallback inside one provider', () => {
+  // A small stand-in for an OpenAI-compatible AI service: `answer(model)` returns
+  // an HTTP status; 200 sends a normal completion.
+  async function fakeAiService(answer) {
+    const requested = [];
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        const { model } = JSON.parse(body);
+        requested.push(model);
+        const status = answer(model);
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(status === 200
+          ? { model, choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"ok":true}' } }], usage: { total_tokens: 12 } }
+          : { error: { code: status, message: 'This model is currently experiencing high demand.' } }));
+      });
+    });
+    await new Promise((resolve) => { server.listen(0, resolve); });
+    const provider = (options) => createOpenAiCompatibleProvider({
+      name: 'gemini', label: 'Gemini', apiKey: 'k', baseUrl: `http://localhost:${server.address().port}`, timeoutMs: 5000, ...options,
+    });
+    return { requested, provider, close: () => server.close() };
+  }
+  const ask = (provider) => provider.generateJson({ system: 's', prompt: 'p', shapeHint: 'h', timeLeftMs: 30_000 });
+
+  test('the next model answers when the default model is overloaded (HTTP 503) or rate-limited (429)', async () => {
+    const service = await fakeAiService((model) => ({ 'busy-model': 503, 'limited-model': 429 }[model] ?? 200));
+    try {
+      const provider = service.provider({ model: 'busy-model', fallbackModels: ['limited-model', 'free-model', 'unused-model'] });
+      const result = await ask(provider);
+      assert.equal(result.text, '{"ok":true}');
+      assert.equal(result.model, 'free-model');
+      assert.deepEqual(result.usage, { totalTokens: 12 });
+      assert.deepEqual(service.requested, ['busy-model', 'limited-model', 'free-model']);
+    } finally {
+      service.close();
+    }
+  });
+
+  test('when every model is overloaded the provider fails, so the next provider is tried', async () => {
+    const service = await fakeAiService(() => 503);
+    try {
+      const provider = service.provider({ model: 'a', fallbackModels: ['b'] });
+      await assert.rejects(ask(provider), (error) => error instanceof AiServiceError && error.code === 'AI_UNAVAILABLE');
+      assert.deepEqual(service.requested, ['a', 'b']);
+    } finally {
+      service.close();
+    }
+  });
+
+  test('a rejected API key is not retried with other models', async () => {
+    const service = await fakeAiService(() => 401);
+    try {
+      const provider = service.provider({ model: 'a', fallbackModels: ['b', 'c'] });
+      await assert.rejects(ask(provider), (error) => error.code === 'AI_AUTH_FAILED');
+      assert.deepEqual(service.requested, ['a']);
+    } finally {
+      service.close();
+    }
+  });
+
+  test('Gemini has fallback models by default; they can be changed or turned off', () => {
+    const gemini = (env) => resolveProviderChain({ GEMINI_API_KEY: 'g', ...env }).providers[0];
+    assert.ok(gemini({}).fallbackModels.length >= 2);
+    assert.ok(!gemini({}).fallbackModels.includes(gemini({}).model));
+    assert.deepEqual(gemini({ GEMINI_FALLBACK_MODELS: 'x-model, y-model' }).fallbackModels, ['x-model', 'y-model']);
+    assert.deepEqual(gemini({ GEMINI_FALLBACK_MODELS: 'none' }).fallbackModels, []);
+    assert.ok(!gemini({ GEMINI_MODEL: 'gemini-3.5-flash' }).fallbackModels.includes('gemini-3.5-flash'));
+    assert.deepEqual(resolveProviderChain({}).providers[0].fallbackModels, [], 'providers without fallback models are unchanged');
+  });
 });

@@ -1,5 +1,8 @@
 // Data-access layer for the "reviews" table. All SQL lives here, so the rest
 // of the application works with plain JavaScript objects.
+//
+// Every query is limited to one owner (user_id): a review of another user
+// behaves exactly like a review that does not exist.
 import { toJson, fromJson } from '../utils/jsonUtils.js';
 
 // Converts a database row (snake_case, JSON strings) to the API shape.
@@ -46,11 +49,11 @@ function rowToSummary(row) {
 
 const INSERT_SQL = `
   INSERT INTO reviews (
-    language, original_code, summary, logic, issues, issue_count, quality_score,
+    user_id, language, original_code, summary, logic, issues, issue_count, quality_score,
     suggestions, improved_code, improvement_explanation, complexity, static_analysis,
     comparison, final_summary, quality, ai_status, ai_message, ai_provider, ai_model
   ) VALUES (
-    :language, :originalCode, :summary, :logic, :issues, :issueCount, :qualityScore,
+    :userId, :language, :originalCode, :summary, :logic, :issues, :issueCount, :qualityScore,
     :suggestions, :improvedCode, :improvements, :complexity, :staticAnalysis,
     :comparison, :finalSummary, :quality, :aiStatus, :aiMessage, :aiProvider, :aiModel
   )`;
@@ -58,6 +61,7 @@ const LIST_SQL = `
   SELECT id, language, summary, issue_count, quality_score, ai_status, created_at,
          substr(original_code, 1, 160) AS code_preview
   FROM reviews
+  WHERE user_id = ?
   ORDER BY created_at DESC, id DESC
   LIMIT ? OFFSET ?`;
 
@@ -67,6 +71,7 @@ export function createReviewModel(db) {
       const result = await db.execute({
         sql: INSERT_SQL,
         args: {
+          userId: review.userId,
           language: review.language,
           originalCode: review.originalCode,
           summary: review.summary ?? '',
@@ -88,30 +93,34 @@ export function createReviewModel(db) {
           aiModel: review.ai?.model ?? null,
         },
       });
-      return this.findById(Number(result.lastInsertRowid));
+      return this.findById(Number(result.lastInsertRowid), review.userId);
     },
 
-    async findById(id) {
-      const { rows } = await db.execute({ sql: 'SELECT * FROM reviews WHERE id = ?', args: [id] });
+    async findById(id, userId) {
+      const { rows } = await db.execute({ sql: 'SELECT * FROM reviews WHERE id = ? AND user_id = ?', args: [id, userId ?? null] });
       return rows.length ? rowToReview(rows[0]) : null;
     },
 
-    async findAll({ limit = 50, offset = 0 } = {}) {
-      const { rows } = await db.execute({ sql: LIST_SQL, args: [limit, offset] });
+    async findAll({ userId, limit = 50, offset = 0 } = {}) {
+      const { rows } = await db.execute({ sql: LIST_SQL, args: [userId ?? null, limit, offset] });
       return rows.map(rowToSummary);
     },
 
-    async count() {
-      const { rows } = await db.execute('SELECT COUNT(*) AS total FROM reviews');
+    async count(userId) {
+      const { rows } = await db.execute({ sql: 'SELECT COUNT(*) AS total FROM reviews WHERE user_id = ?', args: [userId ?? null] });
       return rows[0].total;
     },
 
     // The generated code of the review is deleted in the same batch
     // (hosted databases do not always enforce ON DELETE CASCADE).
-    async deleteById(id) {
+    async deleteById(id, userId) {
+      const owner = userId ?? null;
       const [, deleted] = await db.batch([
-        { sql: 'DELETE FROM code_actions WHERE review_id = ?', args: [id] },
-        { sql: 'DELETE FROM reviews WHERE id = ?', args: [id] },
+        {
+          sql: 'DELETE FROM code_actions WHERE review_id IN (SELECT id FROM reviews WHERE id = ? AND user_id = ?)',
+          args: [id, owner],
+        },
+        { sql: 'DELETE FROM reviews WHERE id = ? AND user_id = ?', args: [id, owner] },
       ], 'write');
       return deleted.rowsAffected > 0;
     },

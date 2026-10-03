@@ -11,6 +11,9 @@
 //       success -> return it
 //       failure (rate limit, timeout, bad JSON, incomplete code, ...) -> try the next provider
 //   all failed -> AiServiceError
+//
+// Every operation also reports `tokensUsed`: the AI tokens of all attempts,
+// including answers that were rejected (they are charged to the user's allowance).
 import {
   SYSTEM_PROMPT, buildReviewPrompt, buildRetryNote,
   CODE_ACTION_SYSTEM_PROMPT, buildCodeActionPrompt, codeActionShapeHint,
@@ -18,6 +21,7 @@ import {
 import { aiReviewSchema, aiCorrectionSchema, aiImprovementSchema } from './ai/reviewSchema.js';
 import { validateAiReview, validateCodeAction } from './ai/aiResponseValidator.js';
 import { AiServiceError } from '../utils/AppError.js';
+import { estimateTokens } from '../utils/tokenEstimate.js';
 import { logger } from '../utils/logger.js';
 
 const ATTEMPTS_PER_PROVIDER = 2;
@@ -30,9 +34,17 @@ function timeLeft(deadline) {
 }
 const outOfTimeError = () => new AiServiceError('AI_TIMEOUT', 'ran out of time before a provider returned a usable answer.');
 
+// Tokens of one answered request: the number reported by the AI service, or
+// an estimate from the text sizes when it reports none.
+function countTokens(task, prompt, response) {
+  const reported = response.usage?.totalTokens;
+  if (Number.isFinite(reported) && reported > 0) return Math.ceil(reported);
+  return estimateTokens(task.system) + estimateTokens(prompt) + estimateTokens(task.shapeHint) + estimateTokens(response.text);
+}
+
 // One provider: ask, validate the answer, and ask once more (explaining what
-// was wrong) if the answer cannot be used.
-async function runWithProvider(provider, task) {
+// was wrong) if the answer cannot be used. `meter.tokens` adds up the tokens used.
+async function runWithProvider(provider, task, meter) {
   let prompt = task.prompt;
   let lastError;
   for (let attempt = 1; attempt <= ATTEMPTS_PER_PROVIDER; attempt += 1) {
@@ -42,11 +54,18 @@ async function runWithProvider(provider, task) {
       break;
     }
     const started = Date.now();
-    const response = await provider.generateJson({
-      system: task.system, prompt, schema: task.schema, shapeHint: task.shapeHint, operation: task.operation,
-      // The request may not run longer than the time left in the budget.
-      timeLeftMs: Number.isFinite(remaining) ? remaining : undefined,
-    });
+    let response;
+    try {
+      response = await provider.generateJson({
+        system: task.system, prompt, schema: task.schema, shapeHint: task.shapeHint, operation: task.operation,
+        // The request may not run longer than the time left in the budget.
+        timeLeftMs: Number.isFinite(remaining) ? remaining : undefined,
+      });
+    } catch (error) {
+      meter.tokens += error?.tokensUsed ?? 0; // e.g. an answer that was cut off
+      throw error;
+    }
+    meter.tokens += countTokens(task, prompt, response);
     try {
       const result = await task.validate(response.text);
       logger.info(`AI ${task.operation} completed`, { provider: provider.name, model: response.model, attempt, ms: Date.now() - started });
@@ -79,6 +98,7 @@ export function createAiReviewService(providers, { skipped = [] } = {}) {
     }
 
     const failures = [];
+    const meter = { tokens: 0 };
     let lastError;
     for (const provider of chain) {
       if (timeLeft(task.deadline) < MIN_ATTEMPT_MS) {
@@ -87,10 +107,13 @@ export function createAiReviewService(providers, { skipped = [] } = {}) {
       }
       const label = provider.label ?? provider.name;
       try {
-        const answer = await runWithProvider(provider, task);
-        return { ...answer, provider: label, failedProviders: failures };
+        const answer = await runWithProvider(provider, task, meter);
+        return { ...answer, provider: label, failedProviders: failures, tokensUsed: meter.tokens };
       } catch (error) {
-        if (!(error instanceof AiServiceError)) throw error;
+        if (!(error instanceof AiServiceError)) {
+          if (error && typeof error === 'object') error.tokensUsed = meter.tokens;
+          throw error;
+        }
         lastError = error;
         failures.push(`${label}: ${error.userMessage}`);
         logger.warn('AI provider failed, trying the next one', { operation: task.operation, provider: provider.name, code: error.code });
@@ -98,7 +121,7 @@ export function createAiReviewService(providers, { skipped = [] } = {}) {
     }
 
     const summary = failures.length === 1 ? failures[0] : `All AI providers failed - ${failures.join(' | ') || lastError?.userMessage}`;
-    throw new AiServiceError(lastError?.code ?? 'AI_ERROR', summary);
+    throw Object.assign(new AiServiceError(lastError?.code ?? 'AI_ERROR', summary), { tokensUsed: meter.tokens });
   }
 
   // "Fix / Correct Code" and "Improve Code". `verify(code)` runs extra checks

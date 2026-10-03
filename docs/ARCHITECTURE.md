@@ -38,14 +38,17 @@ This document explains how the system is built, how a request flows through it, 
 | **Web Frontend** | `client/src/**` | Editor, upload, results tabs, history, report download |
 | **API client** | `client/src/services/api.js` | The only place the frontend talks to the backend |
 | **REST API** | `server/app.js`, `routes/*`, `controllers/*` | HTTP endpoints; translates HTTP ↔ service calls |
-| **Middleware** | `middleware/*` | Validation, rate limiting, request logging, error handling |
+| **Middleware** | `middleware/*` | Login check (`requireAuth`), same-origin guard, validation, rate limiting, request logging, error handling |
+| **Auth Service** | `services/authService.js`, `utils/password.js` | Register, login, logout, sessions, password hashing |
+| **Usage Service** | `services/usageService.js` | AI token allowance: reserve before an AI request, charge after it, stop at the limit |
+| **User / Session / Usage Models** | `models/userModel.js`, `sessionModel.js`, `usageModel.js` | SQL for `users`, `sessions`, `user_ai_usage`, `ai_usage_logs` |
 | **Review Service** | `services/reviewService.js` | Orchestrates the whole review pipeline |
 | **Language Detector** | `services/languageDetector.js` | Warns when the code does not match the selected language |
 | **Static Analysis Engine** | `services/staticAnalysis/*` | Parser, syntax checker, metrics, rule sets |
 | **AI Review Engine** | `services/aiReviewService.js`, `services/ai/*` | Prompt, AI provider call, JSON validation, retry |
 | **Review Aggregator** | `services/reviewAggregator.js` | Merge, de-duplicate, rank, score, compare original vs improved |
 | **Report Service** | `services/reportService.js` | HTML and Markdown reports |
-| **Review Model** | `models/reviewModel.js` | CRUD on the `reviews` table |
+| **Review Model** | `models/reviewModel.js` | CRUD on the `reviews` table, always limited to the owner (`user_id`) |
 | **Database** | `database/db.js`, `database/schema.sql` | SQLite connection and schema |
 
 ---
@@ -202,6 +205,7 @@ Table `reviews` (see `server/database/schema.sql`):
 | Column | Type | Content |
 |---|---|---|
 | `id` | INTEGER PK | Review ID |
+| `user_id` | INTEGER FK → `users.id` | Owner of the review; every query filters on it |
 | `language` | TEXT | `python` / `java` / `cpp` / `javascript` |
 | `original_code` | TEXT | Submitted code |
 | `summary` | TEXT | Code summary |
@@ -236,6 +240,71 @@ Table `code_actions` (the complete corrected / improved code, see section 5a):
 | `ai_provider`, `ai_model` | TEXT | For the developer only (never sent to the public API) |
 | `generated_at` | TEXT | ISO timestamp (updated when generated again) |
 
+Tables for user accounts and the AI token allowance (see section 7a):
+
+| Table | Columns | Content |
+|---|---|---|
+| `users` | `id`, `email` (UNIQUE), `password_hash`, `email_verified`, `disabled`, `created_at`, `updated_at` | One row per account; the password only as a salted Argon2id hash |
+| `sessions` | `id`, `user_id` FK, `token_hash` (UNIQUE), `expires_at`, `created_at` | One row per login; the SHA-256 hash of the session token |
+| `email_verification_codes` | `id`, `user_id` FK, `email`, `purpose` (verify / reset), `otp_hash`, `token_hash` (UNIQUE), `expires_at`, `attempts`, `created_at`, `used_at` | One-time codes (hashes only) |
+| `rate_limits` | `key` PK, `hits`, `reset_at` | Counters for rate limits and login failures |
+| `security_events` | `id`, `user_id` FK, `event`, `detail`, `created_at` | Audit log |
+| `user_ai_usage` | `id`, `user_id` FK (UNIQUE), `tokens_allocated`, `tokens_used`, `tokens_remaining`, `created_at`, `updated_at` | The token balance of each user |
+| `ai_usage_logs` | `id`, `user_id` FK, `request_id`, `feature`, `tokens_used`, `created_at` | One row per AI request (`review` / `correct` / `improve`) |
+
+Relationships: User 1 — * Review, User 1 — 1 AI Usage, User 1 — * Usage Log, User 1 — * Session, Review 1 — 0..2 Code Action.
+
+---
+
+## 7a. User accounts, data isolation and AI tokens
+
+**Registration, e-mail verification and login**
+
+```
+Register:  validate e-mail / password / confirmation ─► hash password (Argon2id + salt)
+           ─► save pending account + one-time code (one transaction)
+           ─► e-mail the 6-digit code ─► verification cookie ─► "Verify email" page
+Verify:    verification cookie + code ─► attempts left? not expired? hash matches?
+           ─► account verified ─► token allowance (DEFAULT_USER_TOKENS) ─► session ─► Dashboard
+Login:     too many failures for this address? ─► verify password ─► verified and not disabled?
+           ─► new session ─► cookie ─► Dashboard (only this user's data)
+Reset:     e-mail a code ─► verification cookie + code + new password ─► all sessions of the account end
+Request:   cookie ─► requireAuth: SHA-256(token) in sessions and not expired? ─► req.user ─► controller
+Logout:    delete the session row ─► clear the cookie
+```
+
+- **One-time code (OTP):** 6 digits from a cryptographically secure generator; valid 10 minutes; works once; 5 wrong entries; a new code replaces the old one; one code per address per minute and 5 per hour. The database stores only a keyed hash (HMAC-SHA256 with `SESSION_SECRET`); the code is never logged or returned by the API.
+- **Bound to the browser:** registering sets a second secret in an httpOnly cookie (`cra_verify`). A code is accepted only together with that cookie, so a code that leaks cannot be used elsewhere, and a password always belongs to the registration that received the code.
+- **No account enumeration:** registering an address that already has an account, and asking a reset for an address without one, give the same answer as the normal case (the real owner gets an e-mail notice instead of a code). Wrong e-mail and wrong password give the same answer too.
+- **Brute force:** after 10 wrong passwords for an address its login is paused for 15 minutes (also for unknown addresses, so nothing is revealed).
+- The session token is a random 32-byte value in an **httpOnly, SameSite=Lax** cookie (HTTPS-only when deployed). JavaScript cannot read it, and nothing about the login is kept in local storage. Every login gets a new session.
+- Sessions, codes and rate-limit counters are stored in the database, so they also work on Vercel (serverless functions keep no memory between requests).
+- **E-mail** (`services/emailService.js`): Brevo or Resend over HTTPS, chosen by `EMAIL_PROVIDER`; the key stays on the server. During development without a provider the message is printed in the server terminal; a deployed server refuses registration instead.
+
+**Data isolation**
+
+- The server takes the user **only from the session** (`req.user`). There is no URL such as `/users/101/...`, and a `userId` in the body, query or headers is ignored.
+- Every SQL query on `reviews` contains `AND user_id = ?`. A review of another user therefore behaves exactly like a missing review: `404 REVIEW_NOT_FOUND` for open, report, delete, fix and improve.
+- The frontend guard (`RequireAuth`) only redirects to the login page; the real check is always on the server.
+
+**AI tokens** (`services/usageService.js`)
+
+```
+AI request ─► requireAuth ─► estimate = code length / 4 + 1,500
+           ─► reserve(estimate): one UPDATE ... WHERE tokens_remaining >= estimate
+                 not enough left ─► TOKEN_LIMIT_REACHED, the AI is NOT called
+           ─► call the AI (all attempts are counted, also rejected answers)
+           ─► settle: replace the reservation by the tokens really used (never below 0),
+              write ai_usage_logs ─► response contains the new balance (usage)
+```
+
+- Tokens used = the number reported by the AI service (`usage.total_tokens`); if a service reports nothing, an estimate of about 4 characters per token.
+- Example: 100,000 allocated, a request uses 2,500 → 2,500 used, 97,500 remaining (97.5 %).
+- At the limit: a new review is completed with the automated checks only; "Fix" and "Improve" return `429 TOKEN_LIMIT_REACHED`. The message is: "You have reached your AI usage limit. Please wait for your allowance to reset or contact the administrator."
+- The balance exists only in `user_ai_usage`. There is no API that writes it, so values in local storage, cookies, request bodies or headers have no effect; refreshing or logging in again shows the same balance.
+- The default allowance is defined once: `DEFAULT_USER_TOKENS` in `server/config/config.js` (environment variable `DEFAULT_USER_TOKEN_LIMIT`). It is given when the e-mail address is verified. The administrator resets a user with `npm run admin -w server -- tokens <email> [tokens]`.
+- AI requests are also limited per user (20 per 15 minutes), counted in the database.
+
 ---
 
 ## 8. Security measures
@@ -248,12 +317,18 @@ The public UI and API never reveal internal details: no AI provider or model nam
 | Running malicious code | Submitted code is **never executed**. Tree-sitter and ESLint only parse it. |
 | Leaking the API key | Key only in `server/.env` (git-ignored); the frontend calls our API, never the AI provider |
 | Oversized / binary input | JSON body limit of 200 KB; 20,000-character and 800-line limits; NUL-byte check; client-side file type and size checks |
-| Abuse / cost attacks | `express-rate-limit`: 300 requests and 20 reviews per 15 minutes per IP |
+| Abuse / cost attacks | `express-rate-limit`: 300 requests per IP; login, code and AI limits counted in the database (per IP / per user); per-user AI token allowance enforced on the server |
+| Password theft | Passwords stored only as salted Argon2id hashes; never logged or returned; login paused after repeated wrong passwords |
+| Fake addresses / bots | E-mail verification with a one-time code (expiry, single use, attempt limit, resend limits) |
+| Account enumeration | Same answers for known and unknown addresses at registration, login and password reset |
+| Session theft / CSRF | Random session token in an httpOnly, SameSite=Lax (HTTPS-only) cookie; only its hash is stored; state-changing requests from other websites are refused |
+| Reading other users' data (IDOR) | The user comes from the session only; every query filters on `user_id`; foreign reviews answer 404 |
+| Token manipulation | Balance stored and updated only on the server (atomic SQL update); the browser can only read it |
 | Cross-origin misuse | CORS limited to `CLIENT_ORIGIN`; only GET, POST and DELETE |
-| Common web attacks | Helmet security headers; `x-powered-by` disabled |
+| Common web attacks | Helmet security headers (CSP, HSTS, no framing, no sniffing, no referrer) for the API and, in `vercel.json`, for the pages; `x-powered-by` disabled |
 | XSS in reports | Every value is HTML-escaped in the report (covered by a test) |
 | Information leakage | Central error handler returns friendly messages only; logs contain no request bodies |
-| SQL injection | Prepared statements with named parameters in `reviewModel.js` |
+| SQL injection | Prepared statements with parameters in all model files |
 
 ---
 
@@ -270,7 +345,15 @@ The public UI and API never reveal internal details: no AI provider or model nam
 | Invalid AI response | One automatic retry; if it fails again, static analysis only |
 | Database failure | 500 `DATABASE_ERROR` "…could not be saved" |
 | Backend down / network failure | "Cannot reach the backend server…" with a **Try again** button |
-| Unknown review ID | 404 "Review #N was not found." |
+| Unknown review ID, or a review of another user | 404 "Review #N was not found." |
+| Not logged in / session expired | 401 `UNAUTHENTICATED`; the browser goes to the login page |
+| Wrong e-mail or password | 401 "Invalid email or password." |
+| Registration: invalid e-mail, weak password, passwords differ | 400 `INVALID_EMAIL` / `WEAK_PASSWORD` / `PASSWORD_MISMATCH`, shown under the form |
+| Wrong, expired or used code; too many attempts; code requested too soon | 400 `OTP_INCORRECT` / `OTP_EXPIRED` / `OTP_INVALID`, 429 `OTP_TOO_MANY_ATTEMPTS` / `OTP_COOLDOWN`; "Resend code" with a countdown |
+| Login to an unverified account | 403 `EMAIL_NOT_VERIFIED`; a new code is sent and the "Verify email" page opens |
+| Too many wrong passwords | 429 `TOO_MANY_ATTEMPTS` "try again in N minutes" |
+| The code cannot be e-mailed | 503 `EMAIL_UNAVAILABLE` "try again in a few minutes" |
+| AI token allowance used up | Review created from static analysis only, with the limit message; Fix / Improve answer 429 `TOKEN_LIMIT_REACHED`; the token bar is red |
 | Fix / Improve: AI unavailable, busy or timed out | 503 / 504 with a friendly message; the original code and the review are unchanged |
 | Fix / Improve: empty, invalid, incomplete (snippet, placeholder, syntax errors) or wrong-language answer | Asked again with the reason, then the next provider. Nothing is shown or saved if all fail (502 `AI_INCOMPLETE_CODE`, `AI_EMPTY_CODE`, `AI_INVALID_RESPONSE`, `AI_WRONG_LANGUAGE`) |
 | Fix / Improve clicked again while running | Buttons are disabled in the UI; the server answers 409 `ACTION_IN_PROGRESS` |

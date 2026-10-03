@@ -1,41 +1,50 @@
 // Controllers translate HTTP requests into service calls and service
 // results into HTTP responses. They contain no business logic.
+//
+// The user is always req.user (set by the requireAuth middleware from the
+// login session). A user ID in the URL, query or body is never used.
+// Responses of AI requests also carry `usage`: the user's new token balance.
 import { generateHtmlReport, generateMarkdownReport } from '../services/reportService.js';
 import { AppError } from '../utils/AppError.js';
 
-export function createReviewController(reviewService, codeActionService) {
+export function createReviewController(reviewService, codeActionService, usageService) {
+  const generateCode = async (req, res, action) => {
+    const data = await codeActionService.generate(req.reviewId, action, req.user.id);
+    res.json({ success: true, data, usage: await usageService.getUsage(req.user.id) });
+  };
+
   return {
     // POST /api/reviews
     async create(req, res) {
-      const review = await reviewService.createReview(req.reviewInput);
-      res.status(201).json({ success: true, data: review });
+      const review = await reviewService.createReview({ ...req.reviewInput, userId: req.user.id });
+      res.status(201).json({ success: true, data: review, usage: await usageService.getUsage(req.user.id) });
     },
 
     // POST /api/reviews/:id/correct - "Fix / Correct Code": the complete corrected source file
     async correct(req, res) {
-      res.json({ success: true, data: await codeActionService.generate(req.reviewId, 'correct') });
+      await generateCode(req, res, 'correct');
     },
 
     // POST /api/reviews/:id/improve - "Improve Code": the complete improved source file
     async improve(req, res) {
-      res.json({ success: true, data: await codeActionService.generate(req.reviewId, 'improve') });
+      await generateCode(req, res, 'improve');
     },
 
     // GET /api/reviews?limit=20&offset=0
     async list(req, res) {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
       const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-      res.json({ success: true, data: await reviewService.listReviews({ limit, offset }) });
+      res.json({ success: true, data: await reviewService.listReviews({ userId: req.user.id, limit, offset }) });
     },
 
     // GET /api/reviews/:id
     async getById(req, res) {
-      res.json({ success: true, data: await reviewService.getReview(req.reviewId) });
+      res.json({ success: true, data: await reviewService.getReview(req.reviewId, req.user.id) });
     },
 
     // DELETE /api/reviews/:id
     async remove(req, res) {
-      await reviewService.deleteReview(req.reviewId);
+      await reviewService.deleteReview(req.reviewId, req.user.id);
       res.json({ success: true, data: { id: req.reviewId, deleted: true } });
     },
 
@@ -45,7 +54,7 @@ export function createReviewController(reviewService, codeActionService) {
       if (!['html', 'md', 'markdown'].includes(format)) {
         throw new AppError('Report format must be "html" or "md".', 400, 'INVALID_FORMAT');
       }
-      const review = await reviewService.getReview(req.reviewId);
+      const review = await reviewService.getReview(req.reviewId, req.user.id);
       const isHtml = format === 'html';
       const filename = `code-review-${review.id}.${isHtml ? 'html' : 'md'}`;
 

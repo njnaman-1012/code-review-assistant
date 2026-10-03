@@ -5,6 +5,8 @@
 //
 //   free: true   -> no payment needed
 //   needsKey     -> a (free) API key is required; keyless ones work out of the box
+//   fallbackModels -> other models of the same service (same key), tried in
+//                     order when the default model is overloaded or rate-limited
 
 export const PROVIDER_PRESETS = {
   gemini: {
@@ -12,6 +14,10 @@ export const PROVIDER_PRESETS = {
     kind: 'openai-compatible',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     defaultModel: 'gemini-3.8-flash',
+    // Google often answers "503 - this model is experiencing high demand" for
+    // one model while the others work; each model also has its own free quota.
+    fallbackModels: ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'],
+    fallbackModelsEnv: 'GEMINI_FALLBACK_MODELS',
     keyEnv: 'GEMINI_API_KEY',
     modelEnv: 'GEMINI_MODEL',
     needsKey: true,

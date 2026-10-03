@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "admin": "node scripts/admin.js",
+    "tokens": "node scripts/admin.js tokens"
   },
   "engines": {
     "node": ">=20.0.0"

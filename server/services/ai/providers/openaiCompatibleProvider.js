@@ -5,6 +5,13 @@
 import OpenAI from 'openai';
 import { AiServiceError } from '../../../utils/AppError.js';
 import { JSON_SHAPE_HINT } from '../promptTemplates.js';
+import { logger } from '../../../utils/logger.js';
+
+// Failures where another model of the same service may still answer: the
+// model is overloaded (HTTP 503), rate-limited, or no longer offered.
+const TRY_NEXT_MODEL = new Set(['AI_UNAVAILABLE', 'AI_RATE_LIMITED', 'AI_MODEL_NOT_FOUND']);
+// Do not start another model with less time than this left.
+const MIN_MODEL_MS = 5000;
 
 function mapError(error) {
   if (error instanceof OpenAI.APIConnectionTimeoutError) {
@@ -36,8 +43,9 @@ function isJsonModeUnsupported(error) {
 }
 
 export function createOpenAiCompatibleProvider({
-  name, label, apiKey, model, baseUrl, headers, maxOutputTokens, timeoutMs, omitAuthWithoutKey,
+  name, label, apiKey, model, fallbackModels = [], baseUrl, headers, maxOutputTokens, timeoutMs, omitAuthWithoutKey,
 }) {
+  const models = [model, ...fallbackModels.filter((other) => other && other !== model)];
   const defaultHeaders = { ...headers };
   // Some keyless services only allow anonymous use when no Authorization
   // header is sent at all (a null value removes the SDK's default header).
@@ -52,14 +60,44 @@ export function createOpenAiCompatibleProvider({
   });
 
   // timeLeftMs: the request must finish within the time left in the review's budget.
-  async function complete(messages, jsonMode, timeLeftMs) {
+  async function complete(modelName, messages, jsonMode, timeLeftMs) {
     const options = timeLeftMs ? { timeout: Math.min(timeoutMs, timeLeftMs), maxRetries: 0 } : undefined;
     return client.chat.completions.create({
-      model,
+      model: modelName,
       messages,
       ...(jsonMode ? { response_format: { type: 'json_object' } } : {}),
       ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
     }, options);
+  }
+
+  // One model: JSON mode first; some free models do not support it, the prompt still asks for JSON.
+  async function completeWithModel(modelName, messages, timeLeftMs) {
+    try {
+      return await complete(modelName, messages, true, timeLeftMs);
+    } catch (error) {
+      if (!isJsonModeUnsupported(error)) throw mapError(error);
+      try {
+        return await complete(modelName, messages, false, timeLeftMs);
+      } catch (retryError) {
+        throw mapError(retryError);
+      }
+    }
+  }
+
+  // The default model first, then the fallback models of the same service.
+  async function completeWithFallback(messages, timeLeftMs) {
+    const deadline = timeLeftMs ? Date.now() + timeLeftMs : null;
+    for (const [index, modelName] of models.entries()) {
+      try {
+        return await completeWithModel(modelName, messages, deadline ? deadline - Date.now() : undefined);
+      } catch (error) {
+        const isLast = index === models.length - 1;
+        const outOfTime = deadline !== null && deadline - Date.now() < MIN_MODEL_MS;
+        if (isLast || outOfTime || !TRY_NEXT_MODEL.has(error.code)) throw error;
+        logger.warn('AI model could not answer, trying another model of the same service', { provider: name, model: modelName, code: error.code });
+      }
+    }
+    throw new AiServiceError('AI_ERROR', 'no model is configured.'); // not reachable: there is always one model
   }
 
   return {
@@ -75,27 +113,23 @@ export function createOpenAiCompatibleProvider({
         { role: 'user', content: `${prompt}\n\n${shapeHint}` },
       ];
 
-      let completion;
-      try {
-        completion = await complete(messages, true, timeLeftMs);
-      } catch (error) {
-        // Some free models do not support JSON mode; the prompt still asks for JSON.
-        if (!isJsonModeUnsupported(error)) throw mapError(error);
-        try {
-          completion = await complete(messages, false, timeLeftMs);
-        } catch (retryError) {
-          throw mapError(retryError);
-        }
-      }
+      const completion = await completeWithFallback(messages, timeLeftMs);
+
+      // Tokens the service reports for this request (charged to the user's allowance).
+      const totalTokens = completion.usage?.total_tokens;
+      const usage = Number.isFinite(totalTokens) ? { totalTokens } : undefined;
 
       const choice = completion.choices?.[0];
       if (choice?.finish_reason === 'length') {
-        throw new AiServiceError('AI_TRUNCATED', 'stopped before finishing the answer (the code may be too long for this model).');
+        throw Object.assign(
+          new AiServiceError('AI_TRUNCATED', 'stopped before finishing the answer (the code may be too long for this model).'),
+          { tokensUsed: totalTokens },
+        );
       }
       if (choice?.message?.refusal) {
-        throw new AiServiceError('AI_REFUSED', 'declined to review this code.');
+        throw Object.assign(new AiServiceError('AI_REFUSED', 'declined to review this code.'), { tokensUsed: totalTokens });
       }
-      return { text: choice?.message?.content ?? '', model: completion.model || model };
+      return { text: choice?.message?.content ?? '', model: completion.model || model, usage };
     },
   };
 }

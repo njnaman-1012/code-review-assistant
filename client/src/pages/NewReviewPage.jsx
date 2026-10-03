@@ -7,6 +7,8 @@ import Icon from '../components/Icon.jsx';
 import { ErrorAlert, Alert } from '../components/Feedback.jsx';
 import { api, getErrorMessage } from '../services/api.js';
 import { useSessionState } from '../hooks/useSessionState.js';
+import { useAuth } from '../context/AuthContext.jsx';
+import { TOKEN_LIMIT_MESSAGE } from '../components/TokenUsage.jsx';
 import { LANGUAGES, ACCEPTED_EXTENSIONS, MAX_CODE_CHARS, languageLabel, guessLanguage } from '../utils/languages.js';
 import { readSourceFile } from '../utils/fileUtils.js';
 import { SAMPLES } from '../utils/samples.js';
@@ -21,6 +23,8 @@ export default function NewReviewPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [dragging, setDragging] = useState(false);
+  const { usage } = useAuth();
+  const outOfTokens = usage?.remaining === 0;
 
   const guessed = useMemo(() => guessLanguage(code), [code]);
   const tooLong = code.length > MAX_CODE_CHARS;
@@ -139,6 +143,9 @@ export default function NewReviewPage() {
           <span className="muted small">You can also drag and drop a file onto the editor.</span>
         </div>
 
+        {outOfTokens && (
+          <Alert type="warning" icon="alert">{TOKEN_LIMIT_MESSAGE} A review will contain the automated checks only.</Alert>
+        )}
         {notice && <Alert type="info">{notice}</Alert>}
         <ErrorAlert message={error} />
         {tooLong && <ErrorAlert message={`The code is longer than ${MAX_CODE_CHARS.toLocaleString()} characters. Please submit a smaller program.`} />}

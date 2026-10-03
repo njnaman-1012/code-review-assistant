@@ -71,18 +71,24 @@ export function createAnthropicProvider({ name = 'anthropic', label = 'Anthropic
         throw mapError(error);
       }
 
+      // Tokens the service reports for this request (charged to the user's allowance).
+      const totalTokens = (message.usage?.input_tokens ?? 0) + (message.usage?.output_tokens ?? 0);
+
       if (message.stop_reason === 'refusal') {
-        throw new AiServiceError('AI_REFUSED', 'The AI declined to review this code.');
+        throw Object.assign(new AiServiceError('AI_REFUSED', 'The AI declined to review this code.'), { tokensUsed: totalTokens });
       }
       if (message.stop_reason === 'max_tokens') {
-        throw new AiServiceError('AI_TRUNCATED', 'The AI response was cut off because the code is too long. Try a shorter program.');
+        throw Object.assign(
+          new AiServiceError('AI_TRUNCATED', 'The AI response was cut off because the code is too long. Try a shorter program.'),
+          { tokensUsed: totalTokens },
+        );
       }
 
       const text = message.content
         .filter((block) => block.type === 'text')
         .map((block) => block.text)
         .join('');
-      return { text, model: message.model };
+      return { text, model: message.model, usage: totalTokens > 0 ? { totalTokens } : undefined };
     },
   };
 }
