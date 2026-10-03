@@ -219,7 +219,7 @@ With the default `AI_PROVIDER=auto`, the server builds a chain of free providers
 
 Rows 1–3 are used only when their free key is set. Rows 4–5 are always available.
 
-Google sometimes answers "this model is experiencing high demand" (HTTP 503) for one Gemini model while its other models work. The server then tries the other Gemini models with the same key (`gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`; change the list with `GEMINI_FALLBACK_MODELS`) before it moves on to the slower keyless providers.
+Google sometimes answers "this model is experiencing high demand" (HTTP 503) for one Gemini model while its other models work. The server then tries the other Gemini models with the same key (`gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`; change the list with `GEMINI_FALLBACK_MODELS`) before it moves on to the slower keyless providers. An overloaded model sometimes hangs instead of failing, so each Gemini model also has a time limit (`AI_MODEL_TIMEOUT_MS`, 45 s plus extra time for long code) after which the next one is tried. For faster but less detailed reviews, set `GEMINI_MODEL=gemini-3.5-flash-lite`.
 
 **Recommended (2 minutes, free, no credit card): add a Google Gemini key** for faster and better reviews:
 1. Open <https://aistudio.google.com/app/apikey> and sign in with a Google account.
@@ -497,7 +497,7 @@ AI failures do **not** fail the request. The review is still created from static
 
 ## Testing
 
-Run the automated backend tests (172 tests, about 15 seconds, no API key, e-mail account or internet needed):
+Run the automated backend tests (174 tests, about 15 seconds, no API key, e-mail account or internet needed):
 
 ```bash
 npm test

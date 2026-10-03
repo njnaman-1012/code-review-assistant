@@ -85,7 +85,7 @@ test('stripLineNumbers removes copied "12 | " prefixes only when every line has 
 
 describe('Model fallback inside one provider', () => {
   // A small stand-in for an OpenAI-compatible AI service: `answer(model)` returns
-  // an HTTP status; 200 sends a normal completion.
+  // an HTTP status (200 sends a normal completion), or { status, delayMs } to answer late.
   async function fakeAiService(answer) {
     const requested = [];
     const server = http.createServer((req, res) => {
@@ -94,18 +94,22 @@ describe('Model fallback inside one provider', () => {
       req.on('end', () => {
         const { model } = JSON.parse(body);
         requested.push(model);
-        const status = answer(model);
-        res.writeHead(status, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(status === 200
-          ? { model, choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"ok":true}' } }], usage: { total_tokens: 12 } }
-          : { error: { code: status, message: 'This model is currently experiencing high demand.' } }));
+        const answered = answer(model);
+        const { status, delayMs = 0 } = typeof answered === 'number' ? { status: answered } : answered;
+        setTimeout(() => {
+          if (res.destroyed) return; // the client gave up waiting
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(status === 200
+            ? { model, choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{"ok":true}' } }], usage: { total_tokens: 12 } }
+            : { error: { code: status, message: 'This model is currently experiencing high demand.' } }));
+        }, delayMs);
       });
     });
     await new Promise((resolve) => { server.listen(0, resolve); });
     const provider = (options) => createOpenAiCompatibleProvider({
       name: 'gemini', label: 'Gemini', apiKey: 'k', baseUrl: `http://localhost:${server.address().port}`, timeoutMs: 5000, ...options,
     });
-    return { requested, provider, close: () => server.close() };
+    return { requested, provider, close: () => { server.closeAllConnections(); server.close(); } };
   }
   const ask = (provider) => provider.generateJson({ system: 's', prompt: 'p', shapeHint: 'h', timeLeftMs: 30_000 });
 
@@ -134,6 +138,33 @@ describe('Model fallback inside one provider', () => {
     }
   });
 
+  test('a model that hangs is given up after its time limit and the next model answers', async () => {
+    const service = await fakeAiService((model) => (model === 'hanging-model' ? { status: 200, delayMs: 5000 } : 200));
+    try {
+      const provider = service.provider({ model: 'hanging-model', fallbackModels: ['fast-model'], modelTimeoutMs: 300 });
+      const started = Date.now();
+      const result = await ask(provider);
+      assert.equal(result.model, 'fast-model');
+      assert.deepEqual(service.requested, ['hanging-model', 'fast-model']);
+      assert.ok(Date.now() - started < 2500, 'did not wait for the hanging model');
+    } finally {
+      service.close();
+    }
+  });
+
+  test('the last model (and a provider without fallback models) keeps the full time limit', async () => {
+    const service = await fakeAiService(() => ({ status: 200, delayMs: 700 }));
+    try {
+      // 700 ms is longer than the model limit, but there is nothing left to switch to.
+      assert.equal((await ask(service.provider({ model: 'only-model', modelTimeoutMs: 300 }))).model, 'only-model');
+      const result = await ask(service.provider({ model: 'slow-a', fallbackModels: ['slow-b'], modelTimeoutMs: 300 }));
+      assert.equal(result.model, 'slow-b');
+      assert.deepEqual(service.requested, ['only-model', 'slow-a', 'slow-b']);
+    } finally {
+      service.close();
+    }
+  });
+
   test('a rejected API key is not retried with other models', async () => {
     const service = await fakeAiService(() => 401);
     try {
@@ -153,5 +184,8 @@ describe('Model fallback inside one provider', () => {
     assert.deepEqual(gemini({ GEMINI_FALLBACK_MODELS: 'none' }).fallbackModels, []);
     assert.ok(!gemini({ GEMINI_MODEL: 'gemini-3.5-flash' }).fallbackModels.includes('gemini-3.5-flash'));
     assert.deepEqual(resolveProviderChain({}).providers[0].fallbackModels, [], 'providers without fallback models are unchanged');
+    assert.ok(gemini({}).modelTimeoutMs >= 30000, 'each Gemini model has a time limit');
+    assert.equal(gemini({ AI_MODEL_TIMEOUT_MS: '20000' }).modelTimeoutMs, 20000);
+    assert.equal(resolveProviderChain({}).providers[0].modelTimeoutMs, undefined);
   });
 });

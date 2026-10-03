@@ -49,6 +49,8 @@ export function resolveProviderChain(env = process.env) {
       apiKey,
       model,
       fallbackModels,
+      // AI_MODEL_TIMEOUT_MS overrides the preset (milliseconds).
+      modelTimeoutMs: Number(env.AI_MODEL_TIMEOUT_MS) > 0 ? Number(env.AI_MODEL_TIMEOUT_MS) : preset.modelTimeoutMs,
       baseUrl,
       headers: preset.headers,
       maxOutputTokens: preset.maxOutputTokens,

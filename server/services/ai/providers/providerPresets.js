@@ -6,7 +6,8 @@
 //   free: true   -> no payment needed
 //   needsKey     -> a (free) API key is required; keyless ones work out of the box
 //   fallbackModels -> other models of the same service (same key), tried in
-//                     order when the default model is overloaded or rate-limited
+//                     order when the default model is overloaded, rate-limited or too slow
+//   modelTimeoutMs -> how long one model may take before the next fallback model is tried
 
 export const PROVIDER_PRESETS = {
   gemini: {
@@ -18,6 +19,10 @@ export const PROVIDER_PRESETS = {
     // one model while the others work; each model also has its own free quota.
     fallbackModels: ['gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'],
     fallbackModelsEnv: 'GEMINI_FALLBACK_MODELS',
+    // A healthy answer takes 10-45 s. An overloaded model sometimes hangs instead
+    // of failing, so each model with a fallback behind it gets this long (plus
+    // extra time for long prompts) before the next model is tried.
+    modelTimeoutMs: 45000,
     keyEnv: 'GEMINI_API_KEY',
     modelEnv: 'GEMINI_MODEL',
     needsKey: true,

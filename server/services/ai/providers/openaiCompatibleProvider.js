@@ -8,10 +8,15 @@ import { JSON_SHAPE_HINT } from '../promptTemplates.js';
 import { logger } from '../../../utils/logger.js';
 
 // Failures where another model of the same service may still answer: the
-// model is overloaded (HTTP 503), rate-limited, or no longer offered.
-const TRY_NEXT_MODEL = new Set(['AI_UNAVAILABLE', 'AI_RATE_LIMITED', 'AI_MODEL_NOT_FOUND']);
+// model is overloaded (HTTP 503), rate-limited, no longer offered, or did not
+// answer in time (an overloaded model sometimes just hangs).
+const TRY_NEXT_MODEL = new Set(['AI_UNAVAILABLE', 'AI_RATE_LIMITED', 'AI_MODEL_NOT_FOUND', 'AI_TIMEOUT']);
 // Do not start another model with less time than this left.
 const MIN_MODEL_MS = 5000;
+// A model that has fallback models behind it gets a shorter time limit, so a
+// hanging model cannot use up the whole request: a base time plus extra time
+// for long prompts (long code needs a long answer).
+const MODEL_TIMEOUT_MS_PER_PROMPT_CHAR = 3;
 
 function mapError(error) {
   if (error instanceof OpenAI.APIConnectionTimeoutError) {
@@ -43,7 +48,7 @@ function isJsonModeUnsupported(error) {
 }
 
 export function createOpenAiCompatibleProvider({
-  name, label, apiKey, model, fallbackModels = [], baseUrl, headers, maxOutputTokens, timeoutMs, omitAuthWithoutKey,
+  name, label, apiKey, model, fallbackModels = [], modelTimeoutMs, baseUrl, headers, maxOutputTokens, timeoutMs, omitAuthWithoutKey,
 }) {
   const models = [model, ...fallbackModels.filter((other) => other && other !== model)];
   const defaultHeaders = { ...headers };
@@ -59,9 +64,21 @@ export function createOpenAiCompatibleProvider({
     maxRetries: 1, // fail over to the next provider quickly instead of waiting
   });
 
-  // timeLeftMs: the request must finish within the time left in the review's budget.
-  async function complete(modelName, messages, jsonMode, timeLeftMs) {
-    const options = timeLeftMs ? { timeout: Math.min(timeoutMs, timeLeftMs), maxRetries: 0 } : undefined;
+  // The time one request may take:
+  //   - never longer than the provider timeout or the time left in the review's budget (timeLeftMs)
+  //   - shorter (modelTimeoutMs + extra for long prompts) when another model can still be tried
+  // No automatic retry when there is a budget or a fallback model: the next model is the retry.
+  function requestOptions(messages, timeLeftMs, hasNextModel) {
+    const limits = [timeoutMs];
+    if (timeLeftMs) limits.push(timeLeftMs);
+    if (hasNextModel && modelTimeoutMs) {
+      const promptChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+      limits.push(modelTimeoutMs + promptChars * MODEL_TIMEOUT_MS_PER_PROMPT_CHAR);
+    }
+    return { timeout: Math.min(...limits), maxRetries: timeLeftMs || models.length > 1 ? 0 : 1 };
+  }
+
+  async function complete(modelName, messages, jsonMode, options) {
     return client.chat.completions.create({
       model: modelName,
       messages,
@@ -71,13 +88,13 @@ export function createOpenAiCompatibleProvider({
   }
 
   // One model: JSON mode first; some free models do not support it, the prompt still asks for JSON.
-  async function completeWithModel(modelName, messages, timeLeftMs) {
+  async function completeWithModel(modelName, messages, options) {
     try {
-      return await complete(modelName, messages, true, timeLeftMs);
+      return await complete(modelName, messages, true, options);
     } catch (error) {
       if (!isJsonModeUnsupported(error)) throw mapError(error);
       try {
-        return await complete(modelName, messages, false, timeLeftMs);
+        return await complete(modelName, messages, false, options);
       } catch (retryError) {
         throw mapError(retryError);
       }
@@ -88,10 +105,12 @@ export function createOpenAiCompatibleProvider({
   async function completeWithFallback(messages, timeLeftMs) {
     const deadline = timeLeftMs ? Date.now() + timeLeftMs : null;
     for (const [index, modelName] of models.entries()) {
+      const hasNextModel = index < models.length - 1;
       try {
-        return await completeWithModel(modelName, messages, deadline ? deadline - Date.now() : undefined);
+        const options = requestOptions(messages, deadline ? deadline - Date.now() : undefined, hasNextModel);
+        return await completeWithModel(modelName, messages, options);
       } catch (error) {
-        const isLast = index === models.length - 1;
+        const isLast = !hasNextModel;
         const outOfTime = deadline !== null && deadline - Date.now() < MIN_MODEL_MS;
         if (isLast || outOfTime || !TRY_NEXT_MODEL.has(error.code)) throw error;
         logger.warn('AI model could not answer, trying another model of the same service', { provider: name, model: modelName, code: error.code });
